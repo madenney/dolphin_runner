@@ -9,6 +9,7 @@
       "import": "./dist/index.js"
     }
   },
+  "bin": { "dolphin-runner": "./dist/cli.js" },
   "files": ["dist", "README.md"],
   "engines": { "node": ">=22" },
   "scripts": {
@@ -16,6 +17,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --test \"test/**/*.test.ts\"",
     "check": "npm run typecheck && npm run test",
+    "prepare": "npm run build",
     "smoke": "node scripts/smoke.ts"
   },
   "dependencies": {},

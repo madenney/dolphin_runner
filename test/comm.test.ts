@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildComm } from "../src/comm.ts";
+import { buildComm, buildMirrorComm } from "../src/comm.ts";
 
 const base = { replay: "/r.slp", startFrame: -123, endFrame: 8454, isRealTimeMode: false };
 
@@ -28,4 +28,12 @@ test("every invocation gets a fresh commandId", () => {
 test("start frame is caller-controlled for clip ranges", () => {
   const c = buildComm({ ...base, startFrame: 4020 });
   assert.equal(c.startFrame, 4020);
+});
+
+test("mirror comm has no frame range and defaults isRealTimeMode to false", () => {
+  const c = buildMirrorComm("/r/game.slp");
+  assert.deepEqual(Object.keys(c).sort(), ["commandId", "isRealTimeMode", "mode", "replay"]);
+  assert.equal(c.mode, "mirror");
+  assert.equal(c.isRealTimeMode, false);
+  assert.notEqual(buildMirrorComm("/r/game.slp").commandId, c.commandId);
 });

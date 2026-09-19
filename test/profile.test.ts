@@ -174,3 +174,84 @@ test("healRealProfile forces the real dump flags off", async () => {
   assert.equal(getInSection(dol, "Movie", "DumpFrames"), "False");
   assert.equal(getInSection(dol, "Movie", "DumpAudio"), "False");
 });
+
+// --- Live/captured-window tuning (obsMirror's half) ---------------------------
+
+test("REGRESSION: GFXBackend is CREATED, not just rewritten — a blank one captures black", async () => {
+  // The fixture's real profile has no [Core] section at all, exactly like a
+  // profile that has never been captured. A rewrite-only builder leaves it
+  // absent → Dolphin picks Vulkan → obs-vkcapture's GL hook sees no swaps.
+  await buildProfile(userDir, { mode: "play", gfxBackend: "OGL" });
+  const dol = read(path.join(userDir, "Config", "Dolphin.ini"));
+  assert.equal(getInSection(dol, "Core", "GFXBackend"), "OGL");
+});
+
+test("mirror tuning lands in the right sections", async () => {
+  await buildProfile(userDir, {
+    mode: "play",
+    gfxBackend: "OGL",
+    audioLatencyMs: 60,
+    emulationSpeed: 0,
+    audioBackend: "Pulse",
+    volume: 100,
+    window: { width: 1920, height: 1080, x: 10, y: 20 },
+    vsync: false,
+    shaderCompilationMode: 0,
+    efbScale: 2,
+  });
+  const dol = read(path.join(userDir, "Config", "Dolphin.ini"));
+  const gfx = read(path.join(userDir, "Config", "GFX.ini"));
+  assert.equal(getInSection(dol, "Core", "Latency"), "60");
+  assert.equal(getInSection(dol, "Core", "EmulationSpeed"), "0");
+  assert.equal(getInSection(dol, "DSP", "Backend"), "Pulse");
+  assert.equal(getInSection(dol, "DSP", "Volume"), "100");
+  assert.equal(getInSection(dol, "Display", "Fullscreen"), "False");
+  assert.equal(getInSection(dol, "Display", "RenderWindowAutoSize"), "False");
+  assert.equal(getInSection(dol, "Display", "RenderWindowWidth"), "1920");
+  assert.equal(getInSection(dol, "Display", "RenderWindowHeight"), "1080");
+  assert.equal(getInSection(dol, "Display", "RenderWindowXPos"), "10");
+  assert.equal(getInSection(dol, "Display", "RenderWindowYPos"), "20");
+  assert.equal(getInSection(gfx, "Hardware", "VSync"), "False");
+  assert.equal(getInSection(gfx, "Settings", "ShaderCompilationMode"), "0");
+  assert.equal(getInSection(gfx, "Settings", "EFBScale"), "2");
+  // The DSP fixture's existing Backend line was rewritten, not duplicated.
+  assert.equal(dol.match(/^Backend = /gm)?.length, 1);
+  // And play mode still never dumps.
+  assert.equal(getInSection(dol, "Movie", "DumpFrames"), "False");
+});
+
+test("tuning is opt-in: a plain build leaves the copy's values alone", async () => {
+  await buildProfile(userDir, { mode: "play" });
+  const dol = read(path.join(userDir, "Config", "Dolphin.ini"));
+  assert.equal(getInSection(dol, "Core", "GFXBackend"), null);
+  assert.equal(getInSection(dol, "DSP", "Backend"), "ALSA");
+});
+
+test("shader cache: Cache/ becomes a symlink to the persistent dir, and is repointed if stale", async () => {
+  const cacheA = path.join(tmp, "shaders-A");
+  const cacheB = path.join(tmp, "shaders-B");
+  await buildProfile(userDir, { mode: "play", shaderCacheDir: cacheA });
+  const link = path.join(userDir, "Cache");
+  assert.ok(fs.lstatSync(link).isSymbolicLink());
+  assert.equal(fs.readlinkSync(link), cacheA);
+  assert.ok(fs.statSync(cacheA).isDirectory(), "target is created");
+
+  // A second build on the same userDir with a different target repoints it.
+  await buildProfile(userDir, { mode: "play", shaderCacheDir: cacheB });
+  assert.equal(fs.readlinkSync(link), cacheB);
+
+  // A REAL Cache dir left by an earlier untuned run is replaced too.
+  fs.unlinkSync(link);
+  fs.mkdirSync(link);
+  fs.writeFileSync(path.join(link, "stale.cache"), "x");
+  await buildProfile(userDir, { mode: "play", shaderCacheDir: cacheA });
+  assert.ok(fs.lstatSync(link).isSymbolicLink());
+  assert.equal(fs.readlinkSync(link), cacheA);
+});
+
+test("window: fullscreen sets Fullscreen=True and leaves the geometry keys alone", async () => {
+  await buildProfile(userDir, { mode: "play", window: { fullscreen: true } });
+  const dol = read(path.join(userDir, "Config", "Dolphin.ini"));
+  assert.equal(getInSection(dol, "Display", "Fullscreen"), "True");
+  assert.equal(getInSection(dol, "Display", "RenderWindowWidth"), null);
+});

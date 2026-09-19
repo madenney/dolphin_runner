@@ -7,6 +7,7 @@ import { foldEnd, parseFrameLine, reachedEnd } from "./frames.ts";
 import { killTree } from "./kill.ts";
 import { lastFrameOf } from "./slp.ts";
 import { dolphinStatus } from "./status.ts";
+import { tailBuffer } from "./tail.ts";
 import type {
   DolphinPaths,
   RecordOptions,
@@ -17,24 +18,10 @@ import type {
 
 const DEFAULT_BOOT_STALL_MS = 90_000;
 const DEFAULT_FRAME_STALL_MS = 30_000;
-const TAIL_LINES = 60;
 
 interface SpawnPlan {
   args: string[];
   commPath: string;
-}
-
-/** Keep the last N lines of a stream — a bounded diagnostic, not a transcript. */
-function tailBuffer(limit = TAIL_LINES) {
-  const lines: string[] = [];
-  return {
-    lines,
-    push(line: string) {
-      if (!line.trim()) return;
-      lines.push(line);
-      if (lines.length > limit) lines.shift();
-    },
-  };
 }
 
 /**

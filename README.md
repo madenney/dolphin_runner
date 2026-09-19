@@ -66,14 +66,34 @@ if (got < expectedSec * 0.9) throw new Error("dump is short — re-record");
 | | |
 |---|---|
 | `record(paths, slp, opts)` | frame-dump → `{ avi, wav, lastFrame, stalled, diagnostic }` |
-| `mirror(paths, slp, opts)` | live playback, no dump *(provisional)* |
+| `obsMirror(paths, opts)` | long-lived, OBS-capturable Dolphin (obs-vkcapture GL path) → handle with `stop()` |
+| `mirror(paths, slp, opts)` | batch-mode live playback, no dump *(leftover; prefer obsMirror)* |
 | `buildProfile(userDir, opts)` | throwaway `--user` profile from a copy of the real one |
 | `healRealProfile(dolphinPath)` | force the real profile's dump flags off |
 | `dolphinStatus(paths)` | human-readable reason, or `null` |
 | `lastFrameOf(slp)` | last frame from the UBJSON footer |
 | `killTree(pid, graceful?)` | kill a process and everything it spawned |
+| `writeMirrorComm(path, slp)` | re-point a running mirror at the next game |
 | `parseFrameLine`, `reachedEnd`, `foldEnd` | the stdout rules, pure and tested |
 | `setInSection`, `setEverywhere`, `getInSection` | the ini editor |
+
+## CLI (for non-Node consumers)
+
+```sh
+dolphin-runner obs-mirror \
+  --dolphin <AppImage> --iso <melee.iso> \
+  --user-dir /tmp/setup-1 --comm /tmp/setup-1/comm.json [--replay <first.slp>] \
+  --capture-name dolphin-1 --efb-scale 2 \
+  [--display :1] [--pulse-sink game1] [--pulse-latency-ms 120] \
+  [--vkcapture-shim <exe-override.so>] [--glcapture-lib <libobs_glcapture.so>] \
+  [--fullscreen | --render-width W --render-height H [--window-x X --window-y Y]] \
+  [--emulation-speed 0] [--audio-latency-ms 60] [--shader-cache <dir>] [--gecko-ini <file>] [--real-time]
+```
+
+Stays in the foreground; one JSON line per event on stdout
+(`started` / `stopping` / `exited` / `error`); SIGTERM to it kills the whole
+Dolphin tree. Re-point it by rewriting `--comm` with a new replay and
+commandId — Dolphin reloads on its own.
 
 ## Scope
 

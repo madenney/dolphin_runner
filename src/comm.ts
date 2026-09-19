@@ -47,3 +47,31 @@ export function writeComm(commPath: string, o: CommOptions): CommFile {
   writeFileSync(commPath, JSON.stringify(comm));
   return comm;
 }
+
+/** The comm file for a LIVE mirror. No frame range: Dolphin follows the file. */
+export interface MirrorCommFile {
+  mode: "mirror";
+  replay: string;
+  isRealTimeMode: boolean;
+  commandId: string;
+}
+
+export function buildMirrorComm(replay: string, isRealTimeMode = false): MirrorCommFile {
+  return {
+    mode: "mirror",
+    replay,
+    isRealTimeMode,
+    commandId: crypto.randomBytes(12).toString("hex"),
+  };
+}
+
+/**
+ * Write a mirror comm. The caller re-points a running Dolphin by calling this
+ * again on the same path with the next replay — the fresh commandId is what
+ * makes Dolphin notice.
+ */
+export function writeMirrorComm(commPath: string, replay: string, isRealTimeMode = false): MirrorCommFile {
+  const comm = buildMirrorComm(replay, isRealTimeMode);
+  writeFileSync(commPath, JSON.stringify(comm));
+  return comm;
+}

@@ -79,6 +79,16 @@ every helper is API. Two layers:
   comm.json into `outDir` → spawn with `-i comm -o base --output-directory -b
   -e iso --user userDir --hide-seekbar --cout` → readline stdout / drain stderr
   / two-tier watchdog → resolve `{ avi, wav, lastFrame, stalled, diagnostic }`.
+- `obs.ts` — `obsMirror()`: a long-lived, OBS-capturable Dolphin for a stream
+  tool. `buildProfile(mode: "play", …)` with the capture tuning forced (OGL,
+  Pulse, Latency 60, fullscreen, VSync off), env from `obsMirrorEnv()`
+  (LD_PRELOAD shim:existing:libobs_glcapture, OBS_VKCAPTURE*, PULSE_*), no
+  `-b`, no watchdog — idling on "waiting for game" is healthy. Returns a
+  handle; `stop()` SIGKILLs the tree. The caller re-points it by rewriting the
+  comm file (`writeMirrorComm`); nothing here watches anything.
+- `cli.ts` — `dolphin-runner obs-mirror …`, the process boundary for non-Node
+  consumers (MST is Rust). One JSON line per event on stdout; foreground until
+  Dolphin exits; SIGINT/SIGTERM/SIGHUP forwarded to the whole tree.
 
 Only `types.ts` and the doc comments describe the contract; the JSDoc on
 `RunOptions`/`RecordResult` is load-bearing and is what consumers will read.
@@ -173,18 +183,39 @@ Each of these cost somebody an event. The comments in the code say so; keep them
     so the emulator IS our direct child and `killTree` reaches it. The daemon
     `setsid()`s, holds the `/tmp/.mount_Slippi*` mount, and exits on its own a
     few seconds after the emulator. Don't count it as a leak and don't kill it.
+19. **`[Core] GFXBackend` must be `OGL` for OBS capture, and CREATED if
+    absent.** obs-vkcapture's GL path preloads `libobs_glcapture.so`, which
+    hooks `glXSwapBuffers`; a Vulkan Dolphin makes no GL swaps and OBS shows
+    black. A blank value is Vulkan on this box, and a never-captured profile
+    has no line to rewrite. Slippi's stock ini also carries `GFXBackend` and
+    `EmulationSpeed` under `[Movie]` — those are movie metadata, ignore them;
+    `[Core]` is the live one.
+20. **A windowed render larger than the display's work area becomes 640x480.**
+    GNOME/mutter refuses the oversize initial map and Dolphin falls back to its
+    default. 1920x1080 windowed on a 1920x1080 display captured at 640x443;
+    1280x720 landed exactly. For a 1:1 1080p capture on a 1080p display,
+    `{ fullscreen: true }` is the only option — which is why MST's mirror path
+    was fullscreen all along.
 
 ## Known unfinished
 
-- **`mirror()` is PROVISIONAL.** The signature is not locked. MST's real mirror
-  spawn has not been read. Do not migrate MST onto it without reading that first.
+- **`obsMirror()` is the real mirror; `mirror()` is a leftover.** MST's spawn
+  (`melee_stream_tool/src-tauri/src/dolphin.rs`) was read 2026-09-19 and
+  `obsMirror` reproduces it: same env, same ini keys, same comm format, no
+  `-b`. Differences on purpose: profile is copy-then-override (MST wrote into a
+  bare dir), LD_PRELOAD is composed directly instead of via the
+  `obs-gamecapture` wrapper, and it never writes the shared profile. Proven by
+  hand 2026-09-19: OBS "Dolphin 2" vkcapture source rendered the instance at
+  1920x1080 via GL (no libvulkan mapped), Pulse routed to `game2` under the
+  shim's name. NOT yet proven: a live, growing `.slp` (only a finished one was
+  available); that path is MST's comm-rewrite loop, unchanged. `mirror()` in
+  `run.ts` can go once nothing wants a batch-mode window.
 - **Windows is UNVERIFIED at runtime.** Path *resolution* is unit-tested; nobody
   has confirmed a Windows Playback Dolphin honours `--user` with Sys-relative-to-
   binary. Do not claim Windows support until someone runs it on a Windows box.
 - **`record()` is verified on Linux only by `npm run smoke`, by hand.** First
   passing run 2026-09-18: 4383-frame replay, AVI 75.07 s vs 75.10 s expected,
-  no stall, no leaked processes, real profile byte-identical. `mirror()` has
-  never been run.
+  no stall, no leaked processes, real profile byte-identical.
 
 ## Migration order, when it is time
 
