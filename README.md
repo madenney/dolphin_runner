@@ -87,6 +87,7 @@ uploads, progress UI, clip selection. Those belong to the app.
 
 ```sh
 npm run check     # typecheck + tests
+npm run smoke     # record one real replay with a real Dolphin; needs GPU + DISPLAY
 ```
 
 Tests run on `node --test` against the TypeScript sources directly (Node 22+

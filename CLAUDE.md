@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for Claude Code working in `slippi-dolphin-runner`.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## What this is
 
@@ -37,9 +37,65 @@ path at all. Both are fixed here, with regression tests named after the bug.
 
 - `npm test` — `node --test` over `test/**/*.test.ts`. **No jest, no vitest.**
   Node 22+ strips TypeScript natively, so tests run straight from source.
+- One file: `node --test test/frames.test.ts`
+- One test: `node --test --test-name-pattern="substring" test/frames.test.ts`
 - `npm run typecheck` — `tsc --noEmit`
 - `npm run build` — emits `dist/` (JS + `.d.ts`)
 - `npm run check` — typecheck + test; run this before you call anything done
+- `npm run smoke [replay.slp]` — the ONLY end-to-end test: records one real
+  replay with a real Dolphin and checks the `.avi` length. Needs a GPU and
+  `DISPLAY`; ~100 s for the default 75 s replay. See `scripts/smoke.ts` for
+  env overrides. Run it after any change to `run.ts`, `kill.ts` or `profile.ts`.
+
+## How the pieces fit
+
+`src/index.ts` re-exports everything; there is no internal/public split, so
+every helper is API. Two layers:
+
+**Tested** (no spawn; `profile.ts` runs against a fixture profile):
+- `paths.ts` — where the *real* profile lives per OS (`realProfileRoot`), and
+  the ini layout of *any* profile root (`profileAt`). Takes `platform` as a
+  parameter so the Windows branch is testable on Linux.
+- `ini.ts` — line-level ini editing. `setInSection` creates the key if absent;
+  `setEverywhere` rewrites an existing key in every section it appears.
+- `frames.ts` — parses `--cout` lines (`[CURRENT_FRAME]`, `[PLAYBACK_END_FRAME]`,
+  `[GAME_END_FRAME]`) and holds the end-of-replay rule (`reachedEnd`, `foldEnd`
+  = earlier end wins).
+- `comm.ts` — the comm.json Dolphin reads; refuses a non-finite `endFrame`.
+- `slp.ts` — `lastFrameOf`, a byte scan of the `.slp` UBJSON footer.
+- `profile.ts` — `buildProfile(userDir, opts)`: copy every real `Config/*.ini`
+  into `userDir`, then override via `ini.ts` (GFX dump geometry, Dolphin.ini dump
+  flags in `[Movie]` + `[DSP]`, verbatim `GALE01.ini`, and in record mode a
+  `Hotkeys.ini` that detaches input). `healRealProfile` is the only write to the
+  real profile.
+
+**Untested by the suite** (needs a process or a real Dolphin):
+- `status.ts` — `dolphinStatus(paths)` → human reason or `null`. Parameterised,
+  never reads env at import.
+- `kill.ts` — `pidTree` (POSIX `pgrep -P` walk) and `killTree` (children first;
+  SIGTERM→SIGKILL escalation when `graceful`; `taskkill /T /F` on Windows).
+- `run.ts` — `runDolphin()` is the single spawn loop; `record()` and `mirror()`
+  differ only in args and in what they return. `record()` = validate → write
+  comm.json into `outDir` → spawn with `-i comm -o base --output-directory -b
+  -e iso --user userDir --hide-seekbar --cout` → readline stdout / drain stderr
+  / two-tier watchdog → resolve `{ avi, wav, lastFrame, stalled, diagnostic }`.
+
+Only `types.ts` and the doc comments describe the contract; the JSDoc on
+`RunOptions`/`RecordResult` is load-bearing and is what consumers will read.
+
+## Tests
+
+- Tests fake the real profile by pointing `XDG_CONFIG_HOME` at a `mkdtemp` dir
+  so `resolveRealProfile`'s Linux branch reads fixtures. Restore env in
+  `finally`/`afterEach` — tests share a process.
+- Tests are named after the bug or rule they pin (`"THE REAL PROFILE IS NEVER
+  TOUCHED"`, `"a profile that has never dumped still gets the dump keys created"`).
+  A regression fix gets its own test with that kind of name; don't fold it into
+  an existing one.
+- Nothing in `test/` spawns Dolphin. If a change touches `run.ts`, the suite
+  cannot tell you it works — run `npm run smoke` and say whether you did.
+- The Config inis on this machine contain a non-UTF-8 byte, so `grep` treats
+  them as binary and silently prints nothing. Use `strings -e S file | grep`.
 
 ## Rules that are not negotiable
 
@@ -108,6 +164,15 @@ Each of these cost somebody an event. The comments in the code say so; keep them
 16. **`InternalResolutionFrameDumps` must be CREATED if absent.** A profile that
     has never dumped has no such key; only rewriting existing lines gives you a
     window-resolution dump and nothing downstream can tell.
+17. **Consumers must pass `efbScale`.** Omitting it inherits the real profile's
+    value, which is whatever the user last played at. The first smoke run
+    inherited `EFBScale = 7` and produced a 25 GB lossless AVI at ~4 fps for a
+    75 s game. lm-clipper sets it from its own config; jungle_media must too.
+18. **The orphaned `Slippi_Playback` process is the AppImage FUSE daemon, not
+    the emulator.** The runtime `exec`s into `AppRun.wrapped` (= `dolphin-emu`),
+    so the emulator IS our direct child and `killTree` reaches it. The daemon
+    `setsid()`s, holds the `/tmp/.mount_Slippi*` mount, and exits on its own a
+    few seconds after the emulator. Don't count it as a leak and don't kill it.
 
 ## Known unfinished
 
@@ -116,10 +181,10 @@ Each of these cost somebody an event. The comments in the code say so; keep them
 - **Windows is UNVERIFIED at runtime.** Path *resolution* is unit-tested; nobody
   has confirmed a Windows Playback Dolphin honours `--user` with Sys-relative-to-
   binary. Do not claim Windows support until someone runs it on a Windows box.
-- **No end-to-end spawn test.** Everything here is tested pure; `record()` itself
-  has never been exercised by the suite (it needs a real Dolphin, ISO and GPU).
-  The next useful step is a smoke harness that records one short replay and
-  checks the `.avi` length against `lastFrame`.
+- **`record()` is verified on Linux only by `npm run smoke`, by hand.** First
+  passing run 2026-09-18: 4383-frame replay, AVI 75.07 s vs 75.10 s expected,
+  no stall, no leaked processes, real profile byte-identical. `mirror()` has
+  never been run.
 
 ## Migration order, when it is time
 
