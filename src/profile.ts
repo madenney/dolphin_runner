@@ -30,7 +30,8 @@ export async function buildProfile(userDir: string, opts: ProfileOptions & { dol
   const src: RealProfile =
     opts.sourceProfile ??
     resolveRealProfile(opts.dolphinPath ?? "");
-  if (!realProfileExists(src)) {
+  const fresh = opts.freshProfile === true;
+  if (!fresh && !realProfileExists(src)) {
     throw new Error(
       `no Slippi Playback profile to copy from at ${src.configDir} — ` +
         `open Playback Dolphin once, or pass sourceProfile`,
@@ -42,19 +43,24 @@ export async function buildProfile(userDir: string, opts: ProfileOptions & { dol
   await fsp.mkdir(destConfig, { recursive: true });
   await fsp.mkdir(destGameSettings, { recursive: true });
 
-  // 1. Copy every real Config/*.ini as the base.
-  const entries = await fsp.readdir(src.configDir).catch(() => [] as string[]);
-  await Promise.all(
-    entries
-      .filter((n) => n.toLowerCase().endsWith(".ini"))
-      .map((n) => fsp.copyFile(path.join(src.configDir, n), path.join(destConfig, n)).catch(() => {})),
-  );
+  // 1. Copy every real Config/*.ini as the base — or, fresh, start from
+  //    nothing: the overrides below CREATE their keys, Dolphin defaults the rest.
+  if (fresh) {
+    for (const n of ["Dolphin.ini", "GFX.ini"]) await fsp.writeFile(path.join(destConfig, n), "");
+  } else {
+    const entries = await fsp.readdir(src.configDir).catch(() => [] as string[]);
+    await Promise.all(
+      entries
+        .filter((n) => n.toLowerCase().endsWith(".ini"))
+        .map((n) => fsp.copyFile(path.join(src.configDir, n), path.join(destConfig, n)).catch(() => {})),
+    );
+  }
 
   const recording = opts.mode === "record";
 
   // 2. GFX.ini — dump geometry.
   let gfx = await fsp.readFile(path.join(destConfig, "GFX.ini"), "utf8").catch(() => "");
-  if (gfx) {
+  if (gfx || fresh) {
     if (recording) {
       // Created if absent: a profile that has never dumped has no such key, and
       // without it the dump comes out at WINDOW resolution, silently.
@@ -63,6 +69,10 @@ export async function buildProfile(userDir: string, opts: ProfileOptions & { dol
       if (opts.aspectRatio != null) gfx = setInSection(gfx, "Settings", "AspectRatio", String(opts.aspectRatio));
     }
     if (opts.efbScale != null) gfx = setInSection(gfx, "Settings", "EFBScale", String(opts.efbScale));
+    if (opts.msaa != null) {
+      gfx = setInSection(gfx, "Settings", "MSAA", String(msaaSamples(opts.msaa)));
+      gfx = setInSection(gfx, "Settings", "SSAA", "False");
+    }
     if (opts.vsync != null) gfx = setInSection(gfx, "Hardware", "VSync", opts.vsync ? "True" : "False");
     if (opts.shaderCompilationMode != null) {
       gfx = setInSection(gfx, "Settings", "ShaderCompilationMode", String(opts.shaderCompilationMode));
@@ -72,10 +82,12 @@ export async function buildProfile(userDir: string, opts: ProfileOptions & { dol
 
   // 3. Dolphin.ini — the dump flags themselves, in BOTH sections that carry them.
   let dol = await fsp.readFile(path.join(destConfig, "Dolphin.ini"), "utf8").catch(() => "");
-  if (dol) {
+  if (dol || fresh) {
     const value = recording ? "True" : "False";
     for (const k of MOVIE_KEYS) {
-      dol = recording ? setInSection(dol, "Movie", k, value) : setEverywhere(dol, k, value);
+      // A fresh play profile has no dump keys at all, which already means off.
+      if (recording) dol = setInSection(dol, "Movie", k, value);
+      else if (!fresh) dol = setEverywhere(dol, k, value);
     }
     if (recording) for (const k of DSP_KEYS) dol = setInSection(dol, "DSP", k, value);
 
@@ -102,9 +114,11 @@ export async function buildProfile(userDir: string, opts: ProfileOptions & { dol
   }
 
   // 4. Gecko codes, verbatim from the consumer.
+  const settingsId = opts.gameSettingsId?.trim() || "GALE01";
+  if (!/^[A-Za-z0-9_.-]+$/.test(settingsId)) throw new Error(`bad gameSettingsId: ${settingsId}`);
   if (opts.geckoIni != null) {
-    await fsp.writeFile(path.join(destGameSettings, "GALE01.ini"), opts.geckoIni);
-  } else {
+    await fsp.writeFile(path.join(destGameSettings, `${settingsId}.ini`), opts.geckoIni);
+  } else if (!fresh) {
     // Copy the real one if there is one, so a consumer that does not manage
     // gecko still gets whatever the profile already had.
     await fsp
@@ -123,6 +137,11 @@ export async function buildProfile(userDir: string, opts: ProfileOptions & { dol
   if (opts.shaderCacheDir && os.type() !== "Windows_NT") {
     await linkShaderCache(userDir, opts.shaderCacheDir);
   }
+}
+
+/** Dolphin's valid MSAA sample counts; anything else is off (1). */
+export function msaaSamples(n: number): number {
+  return n === 2 || n === 4 || n === 8 ? n : 1;
 }
 
 async function linkShaderCache(userDir: string, target: string): Promise<void> {

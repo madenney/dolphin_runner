@@ -48,6 +48,10 @@ const res = await record(paths, "/path/to/game.slp", {
 const expectedSec = (res.lastFrame + 123) / 60;
 ```
 
+`onSpawn: (pid) => …` (record and mirror) is called once with the Dolphin's pid —
+the root of the tree that owns the window (`pidTree(pid)` for the rest), e.g.
+for window parking.
+
 ### A stall is not a failure
 
 `record()` resolves even when the watchdog fires, with `stalled: true` and a
@@ -87,8 +91,27 @@ dolphin-runner obs-mirror \
   [--display :1] [--pulse-sink game1] [--pulse-latency-ms 120] \
   [--vkcapture-shim <exe-override.so>] [--glcapture-lib <libobs_glcapture.so>] \
   [--fullscreen | --render-width W --render-height H [--window-x X --window-y Y]] \
-  [--emulation-speed 0] [--audio-latency-ms 60] [--shader-cache <dir>] [--gecko-ini <file>] [--real-time]
+  [--emulation-speed 0] [--audio-latency-ms 60] [--shader-cache <dir>] [--gecko-ini <file>] [--real-time] \
+  [--game-settings-id GALE01] [--gfx-backend OGL|Vulkan] [--msaa 1|2|4|8] [--fresh-profile] [--no-capture]
 ```
+
+`--fresh-profile` builds the `--user` dir from empty inis (only the keys above,
+Dolphin defaults for the rest) instead of copying the real Playback profile —
+the way MST's own launch always worked. `--no-capture` runs the same Dolphin
+with no capture hook (`OBS_VKCAPTURE=0`, no `LD_PRELOAD`).
+
+### Building the CLI (what MST runs)
+
+```sh
+cd ~/Projects/dolphin_runner && npm ci && npm run build   # → dist/cli.js
+node dist/cli.js --help
+```
+
+MST (jungle `apps/mst`) uses this for its mirror feeds only when
+`MST_DOLPHIN_RUNNER=1` (or `useDolphinRunner: true` in its config). It runs
+`$DOLPHIN_RUNNER` if set (a command, or a path to `cli.js`), else
+`~/Projects/dolphin_runner/dist/cli.js` via `node`. MST keeps the comm-file
+follow; this process owns the profile, the config and the capture env.
 
 Stays in the foreground; one JSON line per event on stdout
 (`started` / `stopping` / `exited` / `error`); SIGTERM to it kills the whole

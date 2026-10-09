@@ -40,6 +40,15 @@ async function runDolphin(
   return await new Promise((resolvePromise, reject) => {
     const env = { ...process.env, ...(o.display ? { DISPLAY: o.display } : {}) };
     const child = spawn(paths.dolphinPath, plan.args, { env });
+    // Hand the pid out as soon as there is one (window parking, diagnostics). A
+    // throwing callback is the caller's bug, never a failed run.
+    child.once("spawn", () => {
+      try {
+        if (child.pid != null) o.onSpawn?.(child.pid);
+      } catch {
+        /* ignore */
+      }
+    });
 
     let end = Infinity;
     let sawAnyFrame = false;

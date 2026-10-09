@@ -20,7 +20,9 @@ const USAGE = `usage:
                             [--vkcapture-shim <.so>] [--glcapture-lib <.so>]
                             [--fullscreen (default) | --render-width <w> --render-height <h> [--window-x <n>] [--window-y <n>]]
                             [--emulation-speed <0>] [--audio-latency-ms <60>]
-                            [--shader-cache <dir>] [--gecko-ini <file>]
+                            [--shader-cache <dir>] [--gecko-ini <file>] [--game-settings-id <GALE01>]
+                            [--gfx-backend <OGL|Vulkan>] [--msaa <1|2|4|8>]
+                            [--fresh-profile] [--no-capture]
 `;
 
 function num(v: string | undefined, name: string): number | undefined {
@@ -61,6 +63,11 @@ async function obsMirrorCmd(argv: string[]) {
       "audio-latency-ms": { type: "string" },
       "shader-cache": { type: "string" },
       "gecko-ini": { type: "string" },
+      "game-settings-id": { type: "string" },
+      "gfx-backend": { type: "string" },
+      msaa: { type: "string" },
+      "fresh-profile": { type: "boolean", default: false },
+      "no-capture": { type: "boolean", default: false },
     },
   });
 
@@ -80,6 +87,11 @@ async function obsMirrorCmd(argv: string[]) {
     width != null && height != null
       ? { width, height, ...(x != null ? { x } : {}), ...(y != null ? { y } : {}) }
       : { fullscreen: true as const };
+
+  const backend = v["gfx-backend"];
+  if (backend != null && backend !== "OGL" && backend !== "Vulkan") {
+    throw new Error(`--gfx-backend must be OGL or Vulkan, got ${JSON.stringify(backend)}`);
+  }
 
   const ac = new AbortController();
   const handle = await obsMirror(
@@ -101,6 +113,11 @@ async function obsMirrorCmd(argv: string[]) {
       audioLatencyMs: num(v["audio-latency-ms"], "audio-latency-ms"),
       shaderCacheDir: v["shader-cache"],
       geckoIni: v["gecko-ini"] ? readFileSync(v["gecko-ini"], "utf8") : undefined,
+      gameSettingsId: v["game-settings-id"],
+      gfxBackend: backend as "OGL" | "Vulkan" | undefined,
+      msaa: num(v.msaa, "msaa"),
+      freshProfile: v["fresh-profile"],
+      capture: !v["no-capture"],
       signal: ac.signal,
     },
   );

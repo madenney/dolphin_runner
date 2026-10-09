@@ -6,7 +6,7 @@ import { killTree } from "./kill.ts";
 import { buildProfile } from "./profile.ts";
 import { dolphinStatus } from "./status.ts";
 import { tailBuffer } from "./tail.ts";
-import type { DolphinPaths, ObsMirrorHandle, ObsMirrorOptions } from "./types.ts";
+import type { DolphinPaths, ObsMirrorHandle, ObsMirrorOptions, ProfileOptions } from "./types.ts";
 
 /** What `obs-gamecapture` preloads. ld.so expands `$LIB` (lib / lib64 / x86_64-linux-gnu). */
 export const DEFAULT_GLCAPTURE_LIB = "/usr/$LIB/obs_glcapture/libobs_glcapture.so";
@@ -25,10 +25,28 @@ const DEFAULT_WINDOW = { fullscreen: true } as const;
  */
 export function obsMirrorEnv(
   base: NodeJS.ProcessEnv,
-  o: Pick<ObsMirrorOptions, "captureName" | "glcaptureLib" | "exeOverrideShim" | "pulseSink" | "pulseLatencyMs" | "display">,
+  o: Pick<
+    ObsMirrorOptions,
+    "captureName" | "glcaptureLib" | "exeOverrideShim" | "pulseSink" | "pulseLatencyMs" | "display" | "capture"
+  >,
 ): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(base)) if (v != null) env[k] = v;
+
+  const common = () => {
+    env.OBS_VKCAPTURE_EXE_NAME = o.captureName;
+    if (o.pulseSink) env.PULSE_SINK = o.pulseSink;
+    env.PULSE_LATENCY_MSEC = String(o.pulseLatencyMs ?? DEFAULT_PULSE_LATENCY_MS);
+    if (o.display) env.DISPLAY = o.display;
+  };
+  if (o.capture === false) {
+    // Same Dolphin, no hook: nothing preloaded (an inherited preload included)
+    // and the vkcapture layer switched off.
+    delete env.LD_PRELOAD;
+    env.OBS_VKCAPTURE = "0";
+    common();
+    return env;
+  }
 
   const preload = [
     o.exeOverrideShim,
@@ -38,11 +56,31 @@ export function obsMirrorEnv(
   env.LD_PRELOAD = preload.join(":");
 
   env.OBS_VKCAPTURE = "1";
-  env.OBS_VKCAPTURE_EXE_NAME = o.captureName;
-  if (o.pulseSink) env.PULSE_SINK = o.pulseSink;
-  env.PULSE_LATENCY_MSEC = String(o.pulseLatencyMs ?? DEFAULT_PULSE_LATENCY_MS);
-  if (o.display) env.DISPLAY = o.display;
+  common();
   return env;
+}
+
+/** The profile options obsMirror applies, pure for tests. */
+export function obsMirrorProfile(paths: DolphinPaths, o: ObsMirrorOptions): ProfileOptions & { dolphinPath: string } {
+  return {
+    mode: "play",
+    dolphinPath: paths.dolphinPath,
+    sourceProfile: o.sourceProfile,
+    freshProfile: o.freshProfile,
+    geckoIni: o.geckoIni,
+    gameSettingsId: o.gameSettingsId,
+    efbScale: o.efbScale,
+    msaa: o.msaa,
+    gfxBackend: o.gfxBackend ?? "OGL",
+    audioBackend: "Pulse",
+    volume: 100,
+    audioLatencyMs: o.audioLatencyMs ?? DEFAULT_AUDIO_LATENCY_MS,
+    emulationSpeed: o.emulationSpeed ?? 0,
+    window: o.window ?? DEFAULT_WINDOW,
+    vsync: false,
+    shaderCompilationMode: 0,
+    shaderCacheDir: o.shaderCacheDir,
+  };
 }
 
 /** The exact argv, pure for tests. No `-b`: the window must stay up. No `--cout`: nobody is listening. */
@@ -67,22 +105,7 @@ export async function obsMirror(paths: DolphinPaths, o: ObsMirrorOptions): Promi
   if (!Number.isFinite(o.efbScale) || o.efbScale <= 0) throw new Error("efbScale is required");
 
   mkdirSync(o.userDir, { recursive: true });
-  await buildProfile(o.userDir, {
-    mode: "play",
-    dolphinPath: paths.dolphinPath,
-    sourceProfile: o.sourceProfile,
-    geckoIni: o.geckoIni,
-    efbScale: o.efbScale,
-    gfxBackend: "OGL",
-    audioBackend: "Pulse",
-    volume: 100,
-    audioLatencyMs: o.audioLatencyMs ?? DEFAULT_AUDIO_LATENCY_MS,
-    emulationSpeed: o.emulationSpeed ?? 0,
-    window: o.window ?? DEFAULT_WINDOW,
-    vsync: false,
-    shaderCompilationMode: 0,
-    shaderCacheDir: o.shaderCacheDir,
-  });
+  await buildProfile(o.userDir, obsMirrorProfile(paths, o));
 
   if (o.replay) {
     if (!existsSync(o.replay)) throw new Error(`replay not found: ${o.replay}`);

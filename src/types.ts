@@ -41,6 +41,20 @@ export interface ProfileOptions {
   geckoIni?: string;
   /** Override the auto-resolved real profile to copy from. */
   sourceProfile?: RealProfile;
+  /**
+   * Start from EMPTY inis instead of copying the real profile: only the keys
+   * set here exist, everything else is Dolphin's default. This is what MST's
+   * in-process launch always did (its per-setup dir never saw the real
+   * profile), so a feed launched this way looks exactly like a legacy one and
+   * no setting in the operator's own Playback profile can leak onto stream.
+   */
+  freshProfile?: boolean;
+  /**
+   * The GameSettings file name the gecko ini is written as (`<id>.ini`).
+   * Default "GALE01" (applies to every revision); MST historically writes
+   * "GALE01r2" (NTSC 1.02).
+   */
+  gameSettingsId?: string;
 
   // --- Tuning for a live/captured window. All optional; omit = keep the copy's value.
 
@@ -74,6 +88,12 @@ export interface ProfileOptions {
    * on a 1080p canvas, fullscreen is the only option on a 1080p display.
    */
   window?: RenderWindow;
+  /**
+   * `[Settings] MSAA` sample count (1 = off, 2, 4, 8; anything else = 1).
+   * Setting it also forces `SSAA = False` (supersampling is far heavier).
+   * Omit to keep the copy's value.
+   */
+  msaa?: number;
   /** `[Hardware] VSync`. False for a mirror — never gate on the display. */
   vsync?: boolean;
   /** `[Settings] ShaderCompilationMode`. 0 = specialized/synchronous-on-demand. */
@@ -119,6 +139,12 @@ export interface RunOptions {
    */
   display?: string;
   onFrame?: (current: number, end: number) => void;
+  /**
+   * Called once with the spawned Dolphin's pid. The AppImage execs, so this is
+   * the root of the tree that owns the window (its descendants: `pidTree`).
+   * Lets a caller park the window without `pgrep -f <userDir>`.
+   */
+  onSpawn?: (pid: number) => void;
   /** No first frame within this long = hung boot. Covers Dolphin boot + ISO load. */
   bootStallMs?: number;
   /** Frames stopped for this long mid-record = frozen. */
@@ -180,6 +206,12 @@ export interface ObsMirrorOptions {
    */
   pulseLatencyMs?: number;
   signal?: AbortSignal;
+  /**
+   * Default true. False launches the same Dolphin WITHOUT the capture hook:
+   * OBS_VKCAPTURE=0 and no LD_PRELOAD at all (an inherited one is dropped
+   * too). MST's load test uses this to tell capture cost from render cost.
+   */
+  capture?: boolean;
 
   // --- Profile. Applied through buildProfile with mode "play".
   /** REQUIRED. Omitting it would inherit the real profile's — see gotcha 17. */
@@ -196,6 +228,14 @@ export interface ObsMirrorOptions {
   shaderCacheDir?: string;
   geckoIni?: string;
   sourceProfile?: RealProfile;
+  /** Default "OGL" — the only backend obs-vkcapture's GL hook sees. "Vulkan" relies on the vkcapture layer. */
+  gfxBackend?: "OGL" | "Vulkan";
+  /** MSAA samples (1 = off). Omit to keep the profile's value. */
+  msaa?: number;
+  /** See ProfileOptions.freshProfile. */
+  freshProfile?: boolean;
+  /** See ProfileOptions.gameSettingsId. */
+  gameSettingsId?: string;
 }
 
 export interface ObsMirrorHandle {
