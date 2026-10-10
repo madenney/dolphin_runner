@@ -9,11 +9,18 @@ Zero runtime dependencies. Node ESM + TypeScript. No Electron, no slippi-js.
 > flag-guarded `obs-mirror` path. Windows is unverified at runtime — see CLAUDE.md.
 > Running hidden / muted, and the codec speed trade-off: [docs/background-and-mute.md](docs/background-and-mute.md).
 
+Moving a project off its own Dolphin-spawning code?
+**[MIGRATING.md](MIGRATING.md)** is the checklist of what to delete.
+Version history and breaking changes: [CHANGELOG.md](CHANGELOG.md).
+
 ## Install
 
 ```sh
 npm install slippi-dolphin-runner      # or: "file:../dolphin_runner" while local
 ```
+
+Pin a tag, never a branch — and do not vendor a copy. A vendored fork that
+drifts is the exact failure this package exists to end.
 
 ## Use
 

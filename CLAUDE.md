@@ -273,9 +273,17 @@ Each of these cost somebody an event. The comments in the code say so; keep them
   placement, `silent`, `audioSink`, `appName` or a non-default `dumpCodec` —
   those were verified by hand (docs/background-and-mute.md).
 
-## Migration order, when it is time
+## Migration order
 
-Dogfood first, lowest risk first. **None of this has started.**
+**The migrations are the deliverable; this package is not.** The plan is to
+finish and document the runner here, then hand each consuming project's agent a
+prompt pointing at `MIGRATING.md` — not to edit those projects from this repo.
+`MIGRATING.md` §8 holds the per-project notes; keep it current as each lands.
+
+Status as of 2026-10-09: jungle_media's VOD recorder and melee_skins consume
+it; MST is on the `obs-mirror` CLI behind a flag, so its old path still exists;
+Lunar's `apps/media` vendors a drifted fork; lm-clipper, replay_archiver and
+kotj still spawn their own.
 
 1. `lm-clipper` — it has the tested profile half already; byte-compare output
    before/after.
