@@ -152,12 +152,22 @@ shelling out to something else.
 
 Surveyed 2026-10-09. Line numbers were right then; check before trusting them.
 
-### Lunar `apps/clipper` (was standalone lm-clipper) — not yet adopted
+### Lunar `apps/clipper` — ADOPTED 2026-10-10 (commit 775c5d8)
 
-The live copy is `~/Projects/lunar/apps/clipper`; `~/Projects/lm-clipper` is a
-stale standalone checkout — ignore it. Line numbers below are the standalone
-one's and are a few off in `apps/clipper` (spawn at `slpToVideo.ts:480`,
-preview at `VideoManager.ts:1091`).
+Done. `record()` for recording, `play()` for preview and Test Dolphin; the
+substring end-frame match, the `\r\n` split, the 1 s preview timer, the
+unbounded stderr, the parent-only `killTree`, both profile builders and
+`setDolphinDumping` are all gone. Uses `commPath` per clip, `texturePacks` +
+`cacheHiresTextures: false`; finals pin `dumpCodec: "ffv1"` and a "Fast Draft"
+UI toggle uses mpeg4 + `emulationSpeed: 0`. Verified byte-identical `.avi` and
+`.wav` against the old spawn; nothing survived; the real profile untouched.
+
+Two things it found on the way out: the old builder's `startsWith('EFBScale')`
+also clobbered `EFBScaledCopy`, and **Test Dolphin had been running on the
+operator's real profile**.
+
+`~/Projects/lm-clipper` is a stale standalone checkout — ignore it. Historical
+notes below; line numbers are the standalone one's.
 
 Three spawn sites: recording (`src/main/slpToVideo.ts:458`), clip preview
 (`src/main/managers/VideoManager.ts:1065`) and "Test Dolphin" (`:1293`).
@@ -184,11 +194,16 @@ endFrame })`; it resolves when the end frame is reached. `--cout` is kept, so
 the end is detected by the numeric frame rule rather than their 1-second
 no-frame timer.
 
-### Lunar (`/home/matt/Projects/lunar`) `apps/media` — vendored fork, delete it
+### Lunar `apps/media` — ADOPTED 2026-10-10 (commit dc5711c)
 
-`src/vendor/dolphin-runner/` is a verbatim copy of an older commit, imported by
-`src/studio/steps/record.js:10`. Replace with a dependency on this repo. Its
-own README already says not to edit it there.
+Done. The vendored fork is deleted, `scanLastFrame`/`withLastFrame` and the
+GFX re-patching are gone, `hardTimeoutMs` replaced its own timer, and the
+ffprobe duration guard and `nice` wrapper stayed. Codec is a dashboard setting
+(`record.dumpCodec`) sent with each job; default `utvideo`, `mpeg4` at
+`efbScale 2`. Verified byte-identical `.avi`+`.wav` — **once `DumpCodec` was
+blanked**, which is why `dumpCodec: "default"` now exists (0.5.2).
+
+Historical notes below.
 
 What that fork is missing: all of `place.ts`, `onSpawn`, `recordEnv`,
 `BACKGROUND_RECORD`, `AUDIO_BACKENDS`, `dumpCodec`, `silent`,

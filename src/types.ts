@@ -20,7 +20,14 @@ export interface RealProfile {
 
 export type ProfileMode = "record" | "play";
 
-export type DumpCodec = "ffv1" | "utvideo" | "mpeg4";
+export type DumpCodec = "ffv1" | "utvideo" | "mpeg4" | "default";
+
+/**
+ * A texture pack. A bare string uses the folder's own name as the destination,
+ * which collides when two packs are both called e.g. `GALE01` — give them
+ * explicit `name`s, or let the builder disambiguate.
+ */
+export type TexturePack = string | { path: string; name?: string };
 
 export type RenderWindow =
   | { fullscreen: true }
@@ -55,6 +62,10 @@ export interface ProfileOptions {
    *   (939 wide), so it is refused for efbScale 2.
    * - "mpeg4": lossy, `bitrateKbps` applies. Fast at native (3.6x with
    *   emulationSpeed 0) but visible blocking at 60 Mb/s at EFB 6.
+   * - "default": force `UseFFV1 = False` and leave `DumpCodec` EMPTY, so
+   *   Dolphin picks the container's default. The only way to reproduce a
+   *   profile that never had a `DumpCodec` line — without it, a consumer
+   *   byte-comparing old against new has to blank the key by hand.
    * Never "h264": it drops the last ~50 frames (lookahead unflushed at SIGTERM).
    */
   dumpCodec?: DumpCodec;
@@ -68,11 +79,14 @@ export interface ProfileOptions {
   dumpFramesAsImages?: boolean;
   /**
    * HD texture packs to make available: each is linked into
-   * `<userDir>/Load/Textures/<gameSettingsId>/<basename>` and turns
-   * `HiresTextures` on. Symlinked by default — a pack is hundreds of MB and a
-   * per-clip copy fills the disk.
+   * `<userDir>/Load/Textures/<gameSettingsId>/<name>` and turns
+   * `HiresTextures` on. `name` defaults to the folder's basename; two packs
+   * whose folders share a name (`GALE01` is common) would otherwise replace
+   * each other, so a clash is disambiguated with a `-2` suffix. Pass
+   * `{ path, name }` to control it. Symlinked by default — a pack is hundreds
+   * of MB and a per-clip copy fills the disk.
    */
-  texturePacks?: string[];
+  texturePacks?: TexturePack[];
   /** `"symlink"` (default) or `"copy"`, for a host with no symlink privilege. */
   texturePackMode?: "symlink" | "copy";
   /** `[Settings] HiresTextures`. Implied by `texturePacks`; set false to force off. */
@@ -412,6 +426,12 @@ export interface RecordOptions extends RunOptions {
    * with no error anywhere.
    */
   commPath?: string;
+  /**
+   * `-b`: Dolphin exits when emulation stops. Default TRUE, and almost always
+   * right for a dump. False leaves the window up after the dump finishes —
+   * for a consumer whose "fullscreen" toggle meant exactly this.
+   */
+  batch?: boolean;
   /**
    * The replay's last frame, when you already know it (from a database, say).
    * Skips reading the file. Without it the footer is read, then the raw event

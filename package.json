@@ -1,6 +1,6 @@
 {
   "name": "slippi-dolphin-runner",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Spawn an isolated Slippi Playback Dolphin to frame-dump or mirror a replay, safely.",
   "type": "module",
   "exports": {
@@ -9,6 +9,7 @@
       "import": "./dist/index.js"
     }
   },
+  "types": "./dist/index.d.ts",
   "bin": { "dolphin-runner": "./dist/cli.js" },
   "files": ["dist", "README.md", "CHANGELOG.md", "MIGRATING.md", "docs"],
   "engines": { "node": ">=22" },

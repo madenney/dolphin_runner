@@ -338,3 +338,41 @@ test("copyFromProfile carries arbitrary assets and replaces the SRAM default", a
   assert.equal(read(path.join(userDir, "Load", "thing.bin")), "t");
   assert.ok(!fs.existsSync(path.join(userDir, "GC", "SRAM.raw")), "the caller's list replaces the default");
 });
+
+// --- reported by Lunar after migrating both its apps, 2026-10-10 -------------
+
+test("REGRESSION: two packs whose folders share a name do not replace each other", async () => {
+  // `GALE01` is a common pack folder name, so this collided in practice.
+  const a = path.join(tmp, "setA", "GALE01");
+  const b = path.join(tmp, "setB", "GALE01");
+  fs.mkdirSync(a, { recursive: true });
+  fs.mkdirSync(b, { recursive: true });
+  fs.writeFileSync(path.join(a, "a.png"), "a");
+  fs.writeFileSync(path.join(b, "b.png"), "b");
+  await buildProfile(userDir, { mode: "record", texturePacks: [a, b] });
+  const root = path.join(userDir, "Load", "Textures", "GALE01");
+  assert.deepEqual(fs.readdirSync(root).sort(), ["GALE01", "GALE01-2"]);
+  assert.ok(fs.existsSync(path.join(root, "GALE01", "a.png")));
+  assert.ok(fs.existsSync(path.join(root, "GALE01-2", "b.png")));
+});
+
+test("a pack can be given an explicit name", async () => {
+  const a = path.join(tmp, "p", "GALE01");
+  fs.mkdirSync(a, { recursive: true });
+  fs.writeFileSync(path.join(a, "x.png"), "x");
+  await buildProfile(userDir, { mode: "record", texturePacks: [{ path: a, name: "melee-hd" }] });
+  assert.ok(fs.existsSync(path.join(userDir, "Load", "Textures", "GALE01", "melee-hd", "x.png")));
+});
+
+test("dumpCodec 'default' forces UseFFV1 off and leaves DumpCodec EMPTY", async () => {
+  // Reproduces a profile that never had a DumpCodec line. Writing a name here
+  // instead made a consumer's byte-for-byte comparison need a manual step.
+  fs.writeFileSync(
+    path.join(realRoot, "Config", "GFX.ini"),
+    ["[Settings]", "UseFFV1 = True", "DumpCodec = mpeg4", "EFBScale = 4", ""].join("\n"),
+  );
+  await buildProfile(userDir, { mode: "record", dumpCodec: "default" });
+  const gfx = read(path.join(userDir, "Config", "GFX.ini"));
+  assert.equal(getInSection(gfx, "Settings", "UseFFV1"), "False");
+  assert.equal(getInSection(gfx, "Settings", "DumpCodec"), "");
+});

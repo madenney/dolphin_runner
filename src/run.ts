@@ -274,16 +274,7 @@ export async function record(
     isRealTimeMode: false,
   });
 
-  const args = [
-    "-i", commPath,
-    "-o", base,
-    `--output-directory=${o.outDir}`,
-    "-b",
-    "-e", paths.isoPath,
-    "--user", o.userDir,
-    "--hide-seekbar",
-    "--cout",
-  ];
+  const args = recordArgs(paths, { ...o, commPath, baseName: base });
 
   const place = await preparePlacement(o, o.display);
   let placing: PlacementHandle | null = null;
@@ -318,6 +309,23 @@ export async function record(
     diagnostic,
     placement,
   };
+}
+
+/** The argv for a frame dump. Pure, for tests. */
+export function recordArgs(
+  paths: DolphinPaths,
+  o: Pick<RecordOptions, "userDir" | "outDir" | "batch"> & { commPath: string; baseName: string },
+): string[] {
+  return [
+    "-i", o.commPath,
+    "-o", o.baseName,
+    `--output-directory=${o.outDir}`,
+    ...(o.batch === false ? [] : ["-b"]),
+    "-e", paths.isoPath,
+    "--user", o.userDir,
+    "--hide-seekbar",
+    "--cout",
+  ];
 }
 
 /**

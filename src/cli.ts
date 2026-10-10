@@ -214,6 +214,7 @@ async function recordCmd(argv: string[]) {
       background: { type: "boolean", default: false },
       "shader-cache": { type: "string" },
       "fresh-profile": { type: "boolean", default: false },
+      "no-batch": { type: "boolean", default: false },
       "hard-timeout-ms": { type: "string" },
       "boot-stall-ms": { type: "string" },
       "frame-stall-ms": { type: "string" },
@@ -230,8 +231,10 @@ async function recordCmd(argv: string[]) {
 
   const paths = { dolphinPath: v.dolphin!, isoPath: v.iso! };
   const codec = v["dump-codec"];
-  if (codec != null && !["ffv1", "utvideo", "mpeg4"].includes(codec)) {
-    throw new Error(`--dump-codec must be ffv1, utvideo or mpeg4 (never h264 — it drops the last ~50 frames)`);
+  if (codec != null && !["ffv1", "utvideo", "mpeg4", "default"].includes(codec)) {
+    throw new Error(
+      `--dump-codec must be ffv1, utvideo, mpeg4 or default (never h264 — it drops the last ~50 frames)`,
+    );
   }
 
   // The CLI builds the profile too: a consumer that can only shell out would
@@ -243,7 +246,7 @@ async function recordCmd(argv: string[]) {
     efbScale: num(v["efb-scale"], "efb-scale"),
     aspectRatio: num(v["aspect-ratio"], "aspect-ratio") as 5 | 6 | undefined,
     bitrateKbps: num(v["bitrate-kbps"], "bitrate-kbps"),
-    dumpCodec: codec as "ffv1" | "utvideo" | "mpeg4" | undefined,
+    dumpCodec: codec as "ffv1" | "utvideo" | "mpeg4" | "default" | undefined,
     geckoIni: v["gecko-ini"] ? readFileSync(v["gecko-ini"], "utf8") : undefined,
     gameSettingsId: v["game-settings-id"],
     texturePacks: v["texture-pack"],
@@ -267,6 +270,7 @@ async function recordCmd(argv: string[]) {
     baseName: v["base-name"],
     commPath: v.comm,
     display: v.display,
+    batch: !v["no-batch"],
     startFrame: num(v["start-frame"], "start-frame"),
     endFrame: num(v["end-frame"], "end-frame"),
     lastFrame: num(v["last-frame"], "last-frame"),

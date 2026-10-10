@@ -228,6 +228,30 @@ final is x264 at 50 Mb/s.
 | mpeg4, any bitrate | 3.0–3.6× (with speed 0) | **−6 dB**, mild softening. Caps at about 37 Mb/s. |
 | utvideo / h264 | fail: odd width | |
 
+**EFB 4 (2×, 1878x1056) and native, from Lunar's rig** — RTX 3060, Linux/X11, 60 s of
+footage, `emulationSpeed 0`. [measured 2026-10-10, reported by the Lunar consumer after
+migrating both its apps; not reproduced here]
+
+| Dump | Realtime | Size | vs FFV1 |
+|---|---|---|---|
+| FFV1 at EFB 4 | 0.34× | 3.8 GB/min | ref |
+| `utvideo` at EFB 4 | **1.81×** (5.3× faster) | 3.1 GB/min | bit-identical after 4:2:0 on 3465/3504 frames |
+| mpeg4 150 Mb/s at EFB 4 | 1.66× | 0.57 GB/min | 42.3 dB |
+| FFV1 at native | ~0.95× (65 s incl. boot) | | ref |
+| mpeg4 40 Mb/s at native | ~4× (4.3× faster) | | 44.8 dB |
+
+This settles the "utvideo at EFB 4 is unmeasured" caveat: it works (1878 is even) and is
+the clear choice there. Note the native FFV1 figure (0.95×) is higher than the 0.77×
+measured here on a 5080 — the encoder is CPU-bound, so it tracks the CPU, not the GPU.
+
+**Dumps are NOT frame-count stable across codec and speed.** [measured 2026-10-10, Lunar]
+The same frame range produced 3504–3534 frames of an expected 3600 depending on codec and
+`emulationSpeed`, and utvideo-vs-FFV1 differed on isolated single frames where Dolphin
+dumped a different frame — not an encoder difference. The "dumps are deterministic"
+assumption under which the quality tables above were frame-aligned holds **within** a
+configuration, not across them. A consumer byte-comparing two runs must hold codec and
+speed fixed; a duration guard with a ratio (not an exact frame count) is the right check.
+
 **Recommendations:**
 - **Archival VOD (jungle_media): `DumpCodec=utvideo`.** It is about 8× faster than FFV1,
   near-identical in quality, and clearly better than today's mpeg4 60M. Budget about 12 GB of

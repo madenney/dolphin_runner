@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { play, playArgs } from "../src/run.ts";
+import { play, playArgs, recordArgs } from "../src/run.ts";
 
 const paths = { dolphinPath: "/d/Dolphin", isoPath: "/i/melee.iso" };
 
@@ -60,4 +60,14 @@ test("a missing replay is refused before anything is spawned", async () => {
     () => play(paths, "/definitely/not/here.slp", { userDir: "/tmp" }),
     /replay not found/,
   );
+});
+
+test("record() can leave the window up too — batch is not forced", () => {
+  // A consumer's "fullscreen" toggle meant exactly this, and record() had no
+  // equivalent while play() did.
+  const base = { userDir: "/u", outDir: "/o", commPath: "/c", baseName: "dump" };
+  assert.ok(recordArgs(paths, base).includes("-b"));
+  assert.ok(!recordArgs(paths, { ...base, batch: false }).includes("-b"));
+  // The dump flags are still there either way — this is not a preview.
+  assert.ok(recordArgs(paths, { ...base, batch: false }).includes("-o"));
 });

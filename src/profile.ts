@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { getInSection, setEverywhere, setInSection } from "./ini.ts";
 import { resolveRealProfile, realProfileExists } from "./paths.ts";
-import type { AudioBackend, ProfileOptions, RealProfile } from "./types.ts";
+import type { AudioBackend, ProfileOptions, RealProfile, TexturePack } from "./types.ts";
 
 /** Dump flags and the sections they live in. Both sections matter for audio. */
 const MOVIE_KEYS = ["DumpFrames", "DumpFramesSilent", "DumpAudio", "DumpAudioSilent"] as const;
@@ -252,8 +252,15 @@ export async function buildProfile(userDir: string, opts: ProfileOptions & { dol
  * which only shows up as "produced no video" after a full-length run.
  */
 function setDumpCodec(gfx: string, codec: string): string {
-  if (codec !== "ffv1" && codec !== "utvideo" && codec !== "mpeg4") {
-    throw new Error(`unknown dumpCodec ${JSON.stringify(codec)} — ffv1, utvideo or mpeg4`);
+  if (codec !== "ffv1" && codec !== "utvideo" && codec !== "mpeg4" && codec !== "default") {
+    throw new Error(`unknown dumpCodec ${JSON.stringify(codec)} — ffv1, utvideo, mpeg4 or default`);
+  }
+  if (codec === "default") {
+    // UseFFV1 off, DumpCodec EMPTY: Dolphin falls back to the container's own
+    // default. Writing a name here instead is what made a consumer's
+    // byte-for-byte comparison against an older profile need a manual step.
+    gfx = setInSection(gfx, "Settings", "UseFFV1", "False");
+    return setInSection(gfx, "Settings", "DumpCodec", "");
   }
   if (codec === "utvideo" && getInSection(gfx, "Settings", "EFBScale")?.trim() === "2") {
     throw new Error("dumpCodec utvideo needs an even dump width; EFBScale 2 (native) dumps 939 wide — use ffv1 or mpeg4");
@@ -284,13 +291,26 @@ function assetsToCopy(opts: ProfileOptions): string[] {
 async function linkTexturePacks(
   userDir: string,
   gameId: string,
-  packs: string[],
+  packs: TexturePack[],
   mode: "symlink" | "copy",
 ): Promise<void> {
   const root = path.join(userDir, "Load", "Textures", gameId);
   await fsp.mkdir(root, { recursive: true });
-  for (const pack of packs) {
-    const dest = path.join(root, path.basename(pack));
+  const used = new Set<string>();
+  for (const entry of packs) {
+    const pack = typeof entry === "string" ? entry : entry.path;
+    // Two packs whose folders are both called `GALE01` would land on the same
+    // destination and silently replace each other. Dolphin searches this tree
+    // recursively, so the folder name is organisational only and a suffix is
+    // safe.
+    let name = (typeof entry === "string" ? undefined : entry.name) ?? path.basename(pack);
+    if (used.has(name)) {
+      let n = 2;
+      while (used.has(`${name}-${n}`)) n++;
+      name = `${name}-${n}`;
+    }
+    used.add(name);
+    const dest = path.join(root, name);
     await fsp.rm(dest, { recursive: true, force: true }).catch(() => {});
     if (mode === "copy") {
       await fsp.cp(pack, dest, { recursive: true });

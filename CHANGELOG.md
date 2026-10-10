@@ -6,6 +6,45 @@ failure mode this package exists to prevent.
 
 Until 1.0 the minor is the breaking digit: `0.x.0` may break, `0.x.y` never does.
 
+## 0.5.2 — 2026-10-10
+
+Everything here was reported by the Lunar consumer after migrating both its
+apps (`apps/media` dc5711c, `apps/clipper` 775c5d8), the first project to go
+end to end on this package.
+
+**Added**
+
+- **`RecordOptions.batch`** (default true). `record()` always passed `-b`, so
+  a consumer whose "fullscreen" toggle meant "leave the window up" had no
+  equivalent on the record path — `play()` had one, `record()` didn't.
+- **`dumpCodec: "default"`** — force `UseFFV1 = False` and leave `DumpCodec`
+  EMPTY, which is Dolphin's per-container default. Previously there was no way
+  to reproduce a profile that never had a `DumpCodec` line, and a consumer's
+  byte-for-byte verification needed a manual blanking step to pass.
+- **`texturePacks` accepts `{ path, name }`**, and bare paths whose basenames
+  collide are now disambiguated with a `-2` suffix instead of silently
+  replacing each other. `GALE01` is a common pack folder name, so this
+  happened in practice. Dolphin searches the tree recursively, so the folder
+  name is organisational and a suffix is safe.
+- A top-level `"types"` field in `package.json`, so a consumer on
+  `moduleResolution: node10` does not need a hand-written `.d.ts` re-export.
+- `recordArgs()` exported, pure and tested, alongside `playArgs`.
+
+**Measurements** folded into `docs/background-and-mute.md`, from Lunar's rig
+(RTX 3060) — these settle the EFB 4 caveat the handoff prompts carried:
+
+- EFB 4: FFV1 0.34× realtime, **utvideo 1.81×** (5.3× faster, bit-identical
+  after 4:2:0 on 3465/3504 frames), mpeg4 150 Mb/s 1.66× at 42.3 dB. utvideo
+  works at EFB 4 (1878 is even) and is the clear choice there.
+- Native: FFV1 ~0.95×, mpeg4 40 Mb/s ~4×. The native FFV1 figure is higher
+  than the 0.77× measured here on a 5080 — the encoder is CPU-bound, so it
+  tracks the CPU rather than the GPU.
+- **Dumps are not frame-count stable across codec and speed**: 3504–3534
+  frames of an expected 3600 for the same range. The "dumps are
+  deterministic" assumption holds *within* a configuration, not across them,
+  so a byte-comparison must hold codec and speed fixed and a duration guard
+  should use a ratio rather than an exact frame count.
+
 ## 0.5.1 — 2026-10-10
 
 **Added**
