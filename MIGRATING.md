@@ -94,7 +94,12 @@ Three things that bite every adopter:
 
 ## 5. Verify the swap
 
-The bar is **byte-identical output**, not "it ran".
+The bar is **byte-identical output**, not "it ran" — but hold the codec and
+`emulationSpeed` FIXED across the two runs. Dumps are not frame-count stable
+across those (3504–3534 frames of an expected 3600 for one range, measured
+2026-10-10), so changing them while you compare will show a difference that is
+not your migration. For the same reason, a duration guard should use a ratio,
+never an exact frame count.
 
 ```sh
 # before: on your current code

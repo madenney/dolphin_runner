@@ -1,7 +1,7 @@
 # Handoff prompts
 
 One per consuming project, to paste into that project's own Claude session.
-Written 2026-10-10 against `slippi-dolphin-runner` **v0.5.1**.
+Written 2026-10-10 against `slippi-dolphin-runner` **v0.5.2**.
 
 The migrations are the deliverable; the package is not. Do them in this order
 (lowest risk first), and do not edit these projects from the dolphin_runner
@@ -40,13 +40,19 @@ Measured on an RTX 5080 against a 75.1 s replay (`docs/background-and-mute.md`
 has the full tables; `EmulationSpeed=0` output is **bit-identical** to real
 time):
 
-| | at EFB 6 (3×, 2816x1584) | at EFB 2 (native, 939x528) |
-|---|---|---|
-| FFV1 | **0.10× realtime** — 12 min per game | 0.77× |
-| `utvideo` | **0.81×**, bit-exact after 4:2:0, ~12 GB/game | fails (odd width) |
-| mpeg4 60 Mb/s | 0.93×, **visible blocking on fast frames** | — |
-| mpeg4 ≥150 Mb/s | 0.74×, caps ~141 Mb/s | 3.0–3.6× with speed 0, but −6 dB |
-| `h264` | **never** — drops the last ~52 frames at SIGTERM | — |
+| | EFB 6 (3×, 2816x1584) | EFB 4 (2×, 1878x1056) | EFB 2 (native, 939x528) |
+|---|---|---|---|
+| FFV1 | **0.10×** — 12 min/game | 0.34× | 0.77–0.95× |
+| `utvideo` | **0.81×**, bit-exact, ~12 GB/game | **1.81×**, ~3.1 GB/min | fails (odd width) |
+| mpeg4 60 Mb/s | 0.93×, **visible blocking** | — | — |
+| mpeg4 ≥150 Mb/s | 0.74×, caps ~141 Mb/s | 1.66×, 42.3 dB | ~4× with speed 0, −6 dB |
+| `h264` | **never** — drops the last ~52 frames at SIGTERM | never | never |
+
+EFB 6 and EFB 2 were measured on an RTX 5080; EFB 4 and the native figures on
+an RTX 3060 (Lunar's rig). The encoder is CPU-bound, so these track the CPU,
+not the GPU. **Dumps are not frame-count stable across codec and speed**
+(3504–3534 frames of an expected 3600), so a byte-comparison must hold both
+fixed, and a duration guard should use a ratio rather than an exact count.
 
 Three in parallel: FFV1 0.32× aggregate, utvideo 2.07×, mpeg4 2.13×.
 
@@ -64,11 +70,16 @@ app's README and its example config, not nowhere.
 
 ---
 
-## 1. Lunar — the whole repo (`apps/media` **and** `apps/clipper`)
+## 1. Lunar — the whole repo ✅ DONE 2026-10-10
+
+_Both apps migrated and verified byte-identical (`apps/media` dc5711c,
+`apps/clipper` 775c5d8). Kept for reference; nothing to send._
+
+<details><summary>original prompt</summary>
 
 > You're working in `~/Projects/lunar`. **Two** apps here spawn Slippi Playback
 > Dolphin, and both should end up on `slippi-dolphin-runner`
-> (`madenney/dolphin_runner`, pin **`#v0.5.1`**):
+> (`madenney/dolphin_runner`, pin **`#v0.5.2`**):
 >
 > - **`apps/media`** (`lunar_media`) — already uses the package, but through a
 >   **vendored copy** that has drifted.
@@ -239,11 +250,13 @@ app's README and its example config, not nowhere.
 >   codebase. Ignore it.** `apps/clipper` is the live one; do not migrate or
 >   sync the other.
 
+</details>
+
 ## 2. jungle — the whole repo (`apps/media` **and** `apps/mst`)
 
 > You're working in `~/Projects/jungle`. Two apps here drive Slippi Playback
 > Dolphin and both should end up fully on `slippi-dolphin-runner`
-> (`madenney/dolphin_runner`, pin **`#v0.5.1`**):
+> (`madenney/dolphin_runner`, pin **`#v0.5.2`**):
 >
 > - **`apps/media`** — the VOD recorder. Already uses the package, but loads it
 >   from a loose checkout and still hand-rolls a lot it now owns.
@@ -270,7 +283,7 @@ app's README and its example config, not nowhere.
 > First, a hazard: `src/lib/render/dolphinRunner.js:40` loads `dist/index.js`
 > in preference to `src/`, and `dist/` is a gitignored build artifact. **A
 > `npm run build` in the dolphin_runner checkout silently changes this app's
-> behaviour.** Point it at a pinned checkout or a real dependency (**v0.5.1**).
+> behaviour.** Point it at a pinned checkout or a real dependency (**v0.5.2**).
 >
 > Delete and replace:
 > - your `xdotool` parking loop (`dolphinShared.js:75`) → `placement: { workspace }`.
@@ -364,7 +377,7 @@ app's README and its example config, not nowhere.
 ## 3. replay_archiver
 
 > You're working in `~/Projects/replay_archiver`. Migrate its Dolphin launching
-> onto `slippi-dolphin-runner` (`madenney/dolphin_runner`, pin **`#v0.5.1`**).
+> onto `slippi-dolphin-runner` (`madenney/dolphin_runner`, pin **`#v0.5.2`**).
 > It's Node ESM, so import it directly. Read `MIGRATING.md` in that repo — §2
 > is the checklist, §8 has a replay_archiver section.
 >
@@ -416,7 +429,7 @@ app's README and its example config, not nowhere.
 >
 > Two things to do, plus one to consider.
 >
-> **1. Bump the pin.** `package.json` is on `#v0.4.0`; current is **`#v0.5.1`**.
+> **1. Bump the pin.** `package.json` is on `#v0.4.0`; current is **`#v0.5.2`**.
 > Nothing between those is a breaking change (see `CHANGELOG.md` — 0.4.0 was
 > the breaking one), but record mode now pins `DumpFormat = avi` /
 > `DumpFramesAsImages = False` and writes `EFBScale` under `[Hacks]` as well as
@@ -461,14 +474,14 @@ app's README and its example config, not nowhere.
 > Dolphin encodes on one thread and that thread is the limit, so the codec is
 > the speed choice (`dumpCodec`), and `emulationSpeed: 0` is bit-identical
 > output that only helps when the encoder is not already the bottleneck.
-> Caveat for you specifically: `rec.mjs` defaults to `efbScale: 3`, which was
-> **not** among the measured resolutions (EFB 6 and EFB 2 were), and
-> `utvideo` requires an **even dump width** — it fails at native's 939 px.
-> Check your actual dump dimensions before trying it. At EFB 6 utvideo was
-> ~8× faster than FFV1 and bit-exact after 4:2:0; at native, mpeg4 plus
-> `emulationSpeed: 0` reached 3.0–3.6× for about −6 dB. Never `h264` — it
+> Caveat for you specifically: `rec.mjs` defaults to `efbScale: 3`, which is
+> between the measured points (EFB 2, 4 and 6 have numbers; 3 does not), and
+> `utvideo` requires an **even dump width** — it fails at native's 939 px, but
+> works at EFB 4's 1878. Check your actual dump dimensions first. utvideo is
+> 1.81× realtime at EFB 4 against FFV1's 0.34×, and bit-identical after 4:2:0;
+> at native, mpeg4 plus `emulationSpeed: 0` reached ~4×. Never `h264` — it
 > drops the last ~52 frames at SIGTERM. If you measure a ratio at EFB 3,
-> report it back; nobody has that number.
+> report it back; nobody has that one.
 >
 > Since this is a tool rather than an app with a settings screen, a codec
 > choice belongs in the `rec.mjs` flags (or the `record` CLI call) **and** in
