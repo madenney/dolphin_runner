@@ -239,8 +239,29 @@ app's README and its example config, not nowhere.
 >   codebase. Ignore it.** `apps/clipper` is the live one; do not migrate or
 >   sync the other.
 
-## 2. jungle — `apps/media`
+## 2. jungle — the whole repo (`apps/media` **and** `apps/mst`)
 
+> You're working in `~/Projects/jungle`. Two apps here drive Slippi Playback
+> Dolphin and both should end up fully on `slippi-dolphin-runner`
+> (`madenney/dolphin_runner`, pin **`#v0.5.1`**):
+>
+> - **`apps/media`** — the VOD recorder. Already uses the package, but loads it
+>   from a loose checkout and still hand-rolls a lot it now owns.
+> - **`apps/mst`** — the stream tool (Rust/Tauri). Already shells out to the
+>   CLI, but only behind a flag, with the legacy path still live.
+>
+> `apps/kotj` does **not** spawn Dolphin — its `dolphins_up` is a status field
+> relayed from the machine agent. Nothing to do there; don't go looking.
+>
+> Read `MIGRATING.md` in `~/Projects/dolphin_runner` (§2 is the delete-this
+> checklist, §5 is how to verify, §8 has a section for each of these apps),
+> plus `README.md` for the API and `CHANGELOG.md` for what changed.
+>
+> Do `apps/media` first — it is pure deletion — then `apps/mst`, which has a
+> sequencing problem to untangle.
+>
+> ### Part A — `apps/media`
+>
 > You're working in `~/Projects/jungle`, app `apps/media`. It already uses
 > `slippi-dolphin-runner` via `DOLPHIN_RUNNER_DIR` but still hand-rolls a lot
 > the package now owns. Read `MIGRATING.md` §8 in `~/Projects/dolphin_runner`
@@ -293,9 +314,9 @@ app's README and its example config, not nowhere.
 > GNOME/mutter.** It degrades to an `onWarning` plus a `"skipped"` report
 > rather than failing, so adopting is safe — but verify parking actually
 > happens there before relying on it, and report back what you find.
-
-## 3. jungle — `apps/mst`
-
+>
+> ### Part B — `apps/mst`
+>
 > You're working in `~/Projects/jungle`, app `apps/mst` (Rust/Tauri). It
 > already spawns `dolphin-runner obs-mirror` but only behind a flag. Read
 > `MIGRATING.md` §8 in `~/Projects/dolphin_runner` for the MST section.
@@ -340,7 +361,7 @@ app's README and its example config, not nowhere.
 > upstream** — only finished replays were available. That's your live case, so
 > test it deliberately and report back.
 
-## 4. replay_archiver
+## 3. replay_archiver
 
 > You're working in `~/Projects/replay_archiver`. Migrate its Dolphin launching
 > onto `slippi-dolphin-runner` (`madenney/dolphin_runner`, pin **`#v0.5.1`**).
@@ -388,7 +409,75 @@ app's README and its example config, not nowhere.
 
 ---
 
+## 4. melee_skins
+
+> You're working in `~/Projects/melee_skins`. It **already uses**
+> `slippi-dolphin-runner` — this is a small catch-up, not a migration.
+>
+> Two things to do, plus one to consider.
+>
+> **1. Bump the pin.** `package.json` is on `#v0.4.0`; current is **`#v0.5.1`**.
+> Nothing between those is a breaking change (see `CHANGELOG.md` — 0.4.0 was
+> the breaking one), but record mode now pins `DumpFormat = avi` /
+> `DumpFramesAsImages = False` and writes `EFBScale` under `[Hacks]` as well as
+> `[Settings]`. Both are fixes, and both can change a dump if your source
+> profile disagreed with them, so byte-compare one render before and after
+> (`MIGRATING.md` §5).
+>
+> **2. Delete the texture-pack handling.** `tools/rec.mjs:27-33` copies each
+> pack into `<userDir>/Load/Textures/GALE01/` and then re-opens the `GFX.ini`
+> that `buildProfile` just wrote to set `HiresTextures`. That is now a
+> `buildProfile` option:
+>
+> ```js
+> await buildProfile(userDir, { mode: "record", efbScale, texturePacks: [args.pack], … });
+> ```
+>
+> It symlinks rather than copies by default (a pack is hundreds of MB and a
+> per-clip copy fills a disk), follows `gameSettingsId` instead of hardcoding
+> `GALE01`, and sets `HiresTextures` for you. Consider
+> `cacheHiresTextures: false` too — lazy-loading beats prefetching a
+> multi-hundred-MB pack per run. While you're there, `rec.mjs:14-25` hardcodes
+> `~/.config/SlippiPlayback/GameSettings/GALE01.ini` to read the gecko ini;
+> `resolveRealProfile(dolphinPath).gameSettingsIni` is exported and handles the
+> per-OS layout.
+>
+> **3. Consider dropping the shim entirely.** `tools/rec.mjs` exists only
+> because the package had no CLI — your real driver is Python
+> (`mskins/iterate.py:263` and friends, under `xvfb-run`). There is now a
+> `record` subcommand that builds the profile too:
+>
+> ```sh
+> dolphin-runner record --dolphin <bin> --iso <iso> --slp <replay.slp> \
+>   --out <dir> --user-dir <dir> --efb-scale 3 --display :N \
+>   [--start-frame N] [--end-frame N] [--texture-pack <dir>] [--gecko-ini <file>]
+> ```
+>
+> It emits one JSON line per event on stdout (`started`, `progress`, `warning`,
+> `result`), which is easier to consume from Python than parsing your own
+> output. Your call whether that is worth the churn — the shim works.
+>
+> **Speed.** You run many dumps for skin iteration, so this is worth a look.
+> Dolphin encodes on one thread and that thread is the limit, so the codec is
+> the speed choice (`dumpCodec`), and `emulationSpeed: 0` is bit-identical
+> output that only helps when the encoder is not already the bottleneck.
+> Caveat for you specifically: `rec.mjs` defaults to `efbScale: 3`, which was
+> **not** among the measured resolutions (EFB 6 and EFB 2 were), and
+> `utvideo` requires an **even dump width** — it fails at native's 939 px.
+> Check your actual dump dimensions before trying it. At EFB 6 utvideo was
+> ~8× faster than FFV1 and bit-exact after 4:2:0; at native, mpeg4 plus
+> `emulationSpeed: 0` reached 3.0–3.6× for about −6 dB. Never `h264` — it
+> drops the last ~52 frames at SIGTERM. If you measure a ratio at EFB 3,
+> report it back; nobody has that number.
+>
+> Since this is a tool rather than an app with a settings screen, a codec
+> choice belongs in the `rec.mjs` flags (or the `record` CLI call) **and** in
+> whatever README or docstring the Python side reads — not as a silent
+> constant. A pipeline running several times slower than it needs to because
+> nobody knew there was a knob is the thing to avoid.
+
 ## Not a consumer
 
-**kotj** does not spawn Dolphin. Its `dolphins_up` is a status field relayed
-from the machine agent. Nothing to do.
+**kotj** (which lives inside the jungle repo, `apps/kotj`) does not spawn
+Dolphin. Its `dolphins_up` is a status field relayed from the machine agent.
+Nothing to do — it is called out in the jungle prompt so nobody goes looking.
