@@ -6,6 +6,28 @@ failure mode this package exists to prevent.
 
 Until 1.0 the minor is the breaking digit: `0.x.0` may break, `0.x.y` never does.
 
+## 0.5.1 — 2026-10-10
+
+**Added**
+
+- **`play()` and `dolphin-runner play`** — a frame range on screen with no
+  dump. The package had two launch shapes and needed three: `record()` dumps
+  and runs hidden in batch, `obsMirror()` wants OBS capture env and a mirror
+  comm with no frame range. A clip PREVIEW is neither, and lm-clipper has two
+  spawn sites that are exactly it (its preview window and "Test Dolphin").
+  Without this, the first project due to migrate would have had to stop and
+  ask for it.
+
+  It keeps `--cout`, so playback stops on the same numeric end-frame rule
+  `record()` uses rather than the 1-second no-frame timer the consumer was
+  using to guess that a clip had finished. It passes no `-o` and no
+  `--output-directory` — a preview that quietly dumped frames would fill a
+  disk behind the operator — and that is pinned by a test.
+- `playArgs()` exported, pure and tested, alongside `obsMirrorArgs`/`recordEnv`.
+
+Proven by hand against a real Dolphin: frames 1000→1600 of a real replay,
+stopped at the end frame, no dump written, no leaked processes.
+
 ## 0.5.0 — 2026-10-09
 
 Closing the gaps between what the package offered and what its five consumers

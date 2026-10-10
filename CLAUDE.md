@@ -89,7 +89,8 @@ every helper is API. Two layers:
 - `kill.ts` — `pidTree` (POSIX `pgrep -P` walk) and `killTree` (children first;
   SIGTERM→SIGKILL escalation when `graceful`; `taskkill /T /F` on Windows).
 - `run.ts` — `runDolphin()` is the frame-watched spawn loop behind `record()`
-  (the old batch-mode `mirror()` was removed 2026-10-09; nothing used it).
+  and `play()` (a frame range on screen, no dump — the preview shape, added
+  2026-10-10; the old batch-mode `mirror()` was removed 2026-10-09).
   `recordEnv()` builds its env: inherited → `env` → `display`/`audioSink`/`appName`. `record()` = validate → write
   comm.json into `outDir` → spawn with `-i comm -o base --output-directory -b
   -e iso --user userDir --hide-seekbar --cout` → readline stdout / drain stderr
@@ -111,7 +112,7 @@ every helper is API. Two layers:
   injected); the real behaviour was measured on GNOME — see gotcha 21.
   `record()`/`obsMirror()` take `placement: { workspace, geometry?, undecorate?,
   monitor? }`; never fatal unless `required`.
-- `cli.ts` — `dolphin-runner record …` and `obs-mirror …`, the process boundary
+- `cli.ts` — `dolphin-runner record …`, `play …` and `obs-mirror …`, the process boundary
   for non-Node consumers (MST is Rust, melee_skins and replay_archiver drive it
   from Python). One JSON line per event on stdout (`started`, `progress`,
   `warning`, `placed`, `result`, `stopping`, `exited`, `error`); foreground

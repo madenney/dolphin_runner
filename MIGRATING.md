@@ -172,9 +172,12 @@ rendering, length-scaled ffmpeg timeouts.
 Needs, now supported: `commPath` (N workers share one `outDir`),
 `texturePacks` + `cacheHiresTextures: false` (`:167`), `-b` is always on —
 its `config.fullscreen` toggle has no equivalent, raise it if that matters.
-Its preview window is a frame-range playback with `--cout` watched; that is
-`record()` without a dump, which the package does **not** have — use
-`record()` into a scratch dir, or ask for a `play()`.
+Its preview window and "Test Dolphin" are frame-range playback with `--cout`
+watched — that is `play()`, added in 0.5.1 for exactly these two sites. Build
+the profile with `mode: "play"`, then `play(paths, slp, { userDir, startFrame,
+endFrame })`; it resolves when the end frame is reached. `--cout` is kept, so
+the end is detected by the numeric frame rule rather than their 1-second
+no-frame timer.
 
 ### Lunar (`/home/matt/Projects/lunar`) `apps/media` — vendored fork, delete it
 

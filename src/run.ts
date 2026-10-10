@@ -12,6 +12,8 @@ import { tailBuffer } from "./tail.ts";
 import type {
   DolphinPaths,
   PlacementReport,
+  PlayOptions,
+  PlayResult,
   RecordOptions,
   RecordResult,
   RunOptions,
@@ -316,6 +318,86 @@ export async function record(
     diagnostic,
     placement,
   };
+}
+
+/**
+ * The argv for a preview. Pure, for tests.
+ *
+ * No `-o` and no `--output-directory`: those are what make a run DUMP, and a
+ * preview that quietly wrote frames would fill a disk behind the operator.
+ * `--cout` stays — it is how the end frame is detected at all.
+ */
+export function playArgs(
+  paths: DolphinPaths,
+  o: Pick<PlayOptions, "userDir" | "batch" | "hideSeekbar"> & { commPath: string },
+): string[] {
+  return [
+    "-i", o.commPath,
+    ...(o.batch === false ? [] : ["-b"]),
+    "-e", paths.isoPath,
+    "--user", o.userDir,
+    ...(o.hideSeekbar ? ["--hide-seekbar"] : []),
+    "--cout",
+  ];
+}
+
+/**
+ * Play a frame range with the window ON SCREEN and no dump — a clip preview.
+ *
+ * The third launch shape, and the one the package was missing: `record()`
+ * dumps and runs hidden in batch, `obsMirror()` wants OBS capture env and a
+ * mirror comm with no frame range. A preview is neither. `--cout` is kept, so
+ * the same numeric end-frame rule stops it at the right place (gotcha 7)
+ * rather than a timer guessing that playback finished.
+ *
+ * Build the profile with `mode: "play"` first — this does not touch it.
+ */
+export async function play(paths: DolphinPaths, slpPath: string, o: PlayOptions): Promise<PlayResult> {
+  if (o.signal?.aborted) throw new Error("canceled");
+  if (!existsSync(slpPath)) throw new Error(`replay not found: ${slpPath}`);
+  const why = dolphinStatus(paths);
+  if (why) throw new Error(`cannot play: ${why}`);
+  if (!existsSync(o.userDir)) throw new Error(`user dir does not exist: ${o.userDir}`);
+
+  const scanned = o.lastFrame ?? lastFrameOf(slpPath);
+  const lastFrame = scanned != null && scanned > 0 ? scanned : (o.endFrame ?? null);
+  if (lastFrame == null || lastFrame <= 0) {
+    throw new Error(
+      `could not read lastFrame from ${slpPath} — pass lastFrame or endFrame if you already know it`,
+    );
+  }
+
+  const commPath = o.commPath ?? path.join(o.userDir, "comm.json");
+  mkdirSync(path.dirname(commPath), { recursive: true });
+  writeComm(commPath, {
+    replay: slpPath,
+    startFrame: o.startFrame ?? -123,
+    endFrame: o.endFrame ?? lastFrame,
+    isRealTimeMode: o.isRealTimeMode ?? false,
+  });
+
+  const args = playArgs(paths, { ...o, commPath });
+
+  const place = await preparePlacement(o, o.display);
+  let placing: PlacementHandle | null = null;
+  const runOpts: PlayOptions = {
+    ...o,
+    onSpawn: (pid) => {
+      if (place.start) placing = place.start(pid);
+      o.onSpawn?.(pid);
+    },
+  };
+  let stalled: boolean;
+  let diagnostic: StallDiagnostic | null;
+  let stoppedEarly: boolean;
+  try {
+    ({ stalled, diagnostic, stoppedEarly } = await runDolphin(paths, slpPath, { args, commPath }, runOpts));
+  } finally {
+    (placing as PlacementHandle | null)?.stop();
+  }
+  const placement = placing ? await (placing as PlacementHandle).done : place.skipped;
+
+  return { lastFrame, stalled, stoppedEarly, diagnostic, placement };
 }
 
 /**

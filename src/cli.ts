@@ -12,7 +12,7 @@ import { parseArgs } from "node:util";
 import { readFileSync } from "node:fs";
 import { obsMirror } from "./obs.ts";
 import { BACKGROUND_RECORD, buildProfile } from "./profile.ts";
-import { record } from "./run.ts";
+import { play, record } from "./run.ts";
 
 const USAGE = `usage:
   dolphin-runner record --dolphin <bin> --iso <iso> --slp <replay.slp>
@@ -26,6 +26,12 @@ const USAGE = `usage:
                         [--hard-timeout-ms <n>] [--boot-stall-ms 90000] [--frame-stall-ms 30000]
                         [--workspace <n> [--placement-required]] [--undecorate]
                         [--geometry WxH[+X+Y]] [--monitor landscape|<output>]
+  dolphin-runner play   --dolphin <bin> --iso <iso> --slp <replay.slp>
+                        --user-dir <dir> [--start-frame N] [--end-frame N]
+                        [--last-frame N] [--comm <path>] [--display <:N>]
+                        [--no-batch] [--hide-seekbar] [--real-time]
+                        [--frame-stall-ms N] [--hard-timeout-ms N]
+                        [--workspace N [--undecorate --geometry WxH --monitor M]]
   events: started, progress, warning, placed, result, error
 
   dolphin-runner obs-mirror --dolphin <bin> --iso <iso> --user-dir <dir> --comm <path>
@@ -298,11 +304,85 @@ async function recordCmd(argv: string[]) {
   });
 }
 
+async function playCmd(argv: string[]) {
+  const { values: v } = parseArgs({
+    args: argv,
+    strict: true,
+    options: {
+      dolphin: { type: "string" },
+      iso: { type: "string" },
+      slp: { type: "string" },
+      "user-dir": { type: "string" },
+      comm: { type: "string" },
+      display: { type: "string" },
+      "start-frame": { type: "string" },
+      "end-frame": { type: "string" },
+      "last-frame": { type: "string" },
+      "no-batch": { type: "boolean", default: false },
+      "hide-seekbar": { type: "boolean", default: false },
+      "real-time": { type: "boolean", default: false },
+      "boot-stall-ms": { type: "string" },
+      "frame-stall-ms": { type: "string" },
+      "hard-timeout-ms": { type: "string" },
+      workspace: { type: "string" },
+      "placement-required": { type: "boolean", default: false },
+      undecorate: { type: "boolean", default: false },
+      geometry: { type: "string" },
+      monitor: { type: "string" },
+    },
+  });
+  for (const k of ["dolphin", "iso", "slp", "user-dir"] as const) {
+    if (!v[k]) throw new Error(`--${k} is required`);
+  }
+  const workspace = num(v.workspace, "workspace");
+  if (v["placement-required"] && workspace == null) throw new Error("--placement-required needs --workspace");
+  const geometry = parseGeometry(v.geometry);
+  if ((geometry || v.undecorate || v.monitor) && workspace == null) {
+    throw new Error("--geometry/--undecorate/--monitor need --workspace (placement is what applies them)");
+  }
+
+  let lastReported = -Infinity;
+  const res = await play({ dolphinPath: v.dolphin!, isoPath: v.iso! }, v.slp!, {
+    userDir: v["user-dir"]!,
+    commPath: v.comm,
+    display: v.display,
+    startFrame: num(v["start-frame"], "start-frame"),
+    endFrame: num(v["end-frame"], "end-frame"),
+    lastFrame: num(v["last-frame"], "last-frame"),
+    batch: !v["no-batch"],
+    hideSeekbar: v["hide-seekbar"],
+    isRealTimeMode: v["real-time"],
+    bootStallMs: num(v["boot-stall-ms"], "boot-stall-ms"),
+    frameStallMs: num(v["frame-stall-ms"], "frame-stall-ms"),
+    hardTimeoutMs: num(v["hard-timeout-ms"], "hard-timeout-ms"),
+    placement:
+      workspace != null
+        ? {
+            workspace,
+            required: v["placement-required"],
+            ...(geometry ? { geometry } : {}),
+            ...(v.undecorate ? { undecorate: true } : {}),
+            ...(v.monitor ? { monitor: v.monitor } : {}),
+          }
+        : undefined,
+    onWarning: (w) => emit({ event: "warning", ...w }),
+    onSpawn: (pid) => emit({ event: "started", pid, replay: v.slp }),
+    onFrame: (current, end) => {
+      if (current - lastReported < 600 && current < end) return;
+      lastReported = current;
+      emit({ event: "progress", current, end });
+    },
+  });
+  emit({ event: "result", ...res });
+}
+
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   switch (cmd) {
     case "record":
       return recordCmd(rest);
+    case "play":
+      return playCmd(rest);
     case "obs-mirror":
       return obsMirrorCmd(rest);
     case undefined:

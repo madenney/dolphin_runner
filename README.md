@@ -147,6 +147,25 @@ await h.stop();                          // SIGKILLs the tree
 
 The caller owns the comm file. Nothing here watches anything.
 
+### `play(paths, slp, opts) → Promise<PlayResult>`
+
+A frame range on screen, no dump — a clip preview. The third launch shape:
+`record()` dumps and runs hidden in batch, `obsMirror()` wants OBS capture env
+and a mirror comm with no frame range; a preview is neither.
+
+```ts
+await buildProfile(userDir, { mode: "play", dolphinPath, efbScale: 4 });
+const r = await play(paths, slp, { userDir, startFrame: 1000, endFrame: 1600 });
+// → { lastFrame, stalled, stoppedEarly, diagnostic, placement }
+```
+
+It keeps `--cout`, so playback stops on the same numeric end-frame rule
+`record()` uses rather than a timer guessing that the clip finished. `-b` is on
+by default (Dolphin exits with emulation); pass `batch: false` to leave the
+window up. Takes the same `placement`, `signal`, `onFrame`, `hardTimeoutMs`
+and `commPath` options as `record()`. No `-o` and no `--output-directory` are
+ever passed — a preview that quietly wrote frames would fill a disk.
+
 ### `buildProfile(userDir, opts) → Promise<void>`
 
 Builds the throwaway `--user` profile: copies every real `Config/*.ini`, then
@@ -279,8 +298,8 @@ spawns Dolphin itself.
 
 ## CLI (for non-Node consumers)
 
-Two subcommands. `record` builds the profile too, so a Python or shell consumer
-needs no Node shim:
+Three subcommands. `record` builds the profile too, so a Python or shell
+consumer needs no Node shim; `play` previews a range on screen:
 
 ```sh
 dolphin-runner record \
@@ -292,6 +311,12 @@ dolphin-runner record \
   [--texture-pack <dir> ...] [--gecko-ini <file>] [--silent] [--background] \
   [--hard-timeout-ms N] [--shader-cache <dir>] [--fresh-profile] \
   [--workspace N [--undecorate --geometry 1920x1080 --monitor landscape]]
+```
+
+```sh
+dolphin-runner play \
+  --dolphin <AppImage> --iso <melee.iso> --slp <game.slp> --user-dir <dir> \
+  [--start-frame 1000] [--end-frame 1600] [--no-batch] [--hide-seekbar]
 ```
 
 Events on stdout, one JSON line each: `started`, `progress`, `warning`,

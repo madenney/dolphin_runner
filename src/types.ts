@@ -530,6 +530,48 @@ export interface ObsMirrorHandle {
   placement: Promise<PlacementReport> | null;
 }
 
+/**
+ * A live playback window: an explicit frame range on screen, no dump.
+ *
+ * Neither `record()` (batch, dumps, hidden) nor `obsMirror()` (OBS capture
+ * env, mirror comm with no frame range) can do this, and it is what a clip
+ * PREVIEW is — the operator watching the range they are about to render.
+ */
+export interface PlayOptions extends RunOptions {
+  /** Defaults to -123, the pre-GO! lead-in. */
+  startFrame?: number;
+  /** Defaults to the `.slp`'s lastFrame. Must be FINITE — see comm.ts. */
+  endFrame?: number;
+  /** The replay's last frame when you already know it. See `RecordOptions.lastFrame`. */
+  lastFrame?: number;
+  /** Where the comm file goes. Defaults to `<userDir>/comm.json`. */
+  commPath?: string;
+  /**
+   * `-b`: Dolphin exits when emulation stops. Default TRUE — a preview that
+   * outlives its clip leaves a window the operator has to close by hand.
+   */
+  batch?: boolean;
+  /** `--hide-seekbar`. Default false: a human watching a preview usually wants it. */
+  hideSeekbar?: boolean;
+  /**
+   * Slippi's `isRealTimeMode`. Default false. True only makes sense for a
+   * replay still being written — on a finished one it parks at the live edge
+   * and never advances (see ObsMirrorOptions).
+   */
+  isRealTimeMode?: boolean;
+}
+
+export interface PlayResult {
+  /** The replay's last frame, however it was determined. */
+  lastFrame: number;
+  /** True if the watchdog fired — including a window the operator left open. */
+  stalled: boolean;
+  /** True if your own `onFrame` returned `"stop"`. */
+  stoppedEarly: boolean;
+  diagnostic: StallDiagnostic | null;
+  placement: PlacementReport | null;
+}
+
 export interface RecordResult {
   avi: string;
   wav: string | null;

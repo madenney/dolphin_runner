@@ -1,4 +1,4 @@
-export { record, recordEnv, appNameProp } from "./run.ts";
+export { record, play, playArgs, recordEnv, appNameProp } from "./run.ts";
 export { placeWindows, checkPlacement, systemX11 } from "./place.ts";
 export type { X11, PlacementHandle, PlacementCheck, Rect, Monitor } from "./place.ts";
 export { obsMirror, obsMirrorEnv, obsMirrorArgs, DEFAULT_GLCAPTURE_LIB } from "./obs.ts";
@@ -27,6 +27,8 @@ export type {
   RunOptions,
   RecordOptions,
   RecordResult,
+  PlayOptions,
+  PlayResult,
   StallDiagnostic,
   ObsMirrorOptions,
   ObsMirrorHandle,
