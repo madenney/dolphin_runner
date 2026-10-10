@@ -296,6 +296,8 @@ Each of these cost somebody an event. The comments in the code say so; keep them
 **The migrations are the deliverable; this package is not.** The plan is to
 finish and document the runner here, then hand each consuming project's agent a
 prompt pointing at `MIGRATING.md` — not to edit those projects from this repo.
+Those prompts are written: `docs/handoff-prompts.md` (one per project, in
+migration order, each with its own codec/speed advice and caveats).
 `MIGRATING.md` §8 holds the per-project notes; keep it current as each lands.
 
 Status as of 2026-10-09: jungle_media's VOD recorder and melee_skins consume
