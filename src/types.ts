@@ -62,6 +62,11 @@ export interface ProfileOptions {
    *   (939 wide), so it is refused for efbScale 2.
    * - "mpeg4": lossy, `bitrateKbps` applies. Fast at native (3.6x with
    *   emulationSpeed 0) but visible blocking at 60 Mb/s at EFB 6.
+   *
+   * **mpeg4's speed advantage is a native/low-resolution thing.** At EFB 3
+   * (1408x792) utvideo and mpeg4 both top out at ~1.27x with emulationSpeed 0
+   * — past that the limit is EMULATION, not the encoder, so lossy buys
+   * nothing over lossless. ffv1 stays encoder-bound there at 0.50x either way.
    * - "default": force `UseFFV1 = False` and leave `DumpCodec` EMPTY, so
    *   Dolphin picks the container's default. The only way to reproduce a
    *   profile that never had a `DumpCodec` line — without it, a consumer

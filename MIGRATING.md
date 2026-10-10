@@ -27,6 +27,27 @@ fork that has silently drifted). If you need a change, change it here.
 Pin a tag or a commit, not a branch. The minor version is the breaking digit
 until 1.0.
 
+**Bumping a pin needs an explicit install.** Editing the tag in `package.json`
+and running `npm install` does **not** move a git dependency — the lockfile
+still satisfies it, so you keep the old commit (reproduced 2026-10-10: edited
+to `#v0.5.2`, `npm install`, still on 0.5.1). This matters because the
+byte-identical check in §5 would then pass without the upgrade ever happening.
+Do this instead, and verify:
+
+```sh
+npm install "github:madenney/dolphin_runner#v0.5.2"
+node -p "require('./node_modules/slippi-dolphin-runner/package.json').version"
+```
+
+**The `allow-scripts` warning on install is harmless.** Newer npm prints
+`slippi-dolphin-runner@x (prepare: npm run build)` and tells you to approve
+scripts. You do not need to: `dist/` is **not** committed, but npm runs
+`prepare` while it packs the git ref, so the build has already happened and
+`dist/` is present in `node_modules`. Confirm with `ls
+node_modules/slippi-dolphin-runner/dist` if you want to be sure. (Do not
+"fix" this by removing `prepare` from the package — that script is what
+produces `dist/` for git installs.)
+
 ## 2. Delete these
 
 Search your project for each. Every one of them is already in the package,
@@ -135,12 +156,25 @@ dolphin-runner obs-mirror --dolphin <bin> --iso <iso> \
   --user-dir <dir> --comm <path> --capture-name dolphin-1 --efb-scale 2
 ```
 
-One JSON line per event on stdout (`started`, `warning`, `placed`, `stopping`,
-`exited`, `error`); SIGTERM to it kills the whole Dolphin tree; exit code is
-Dolphin's. Build it with `npm ci && npm run build` → `dist/cli.js`.
+There are three subcommands. `record` builds the profile too, so a Python or
+shell consumer needs no Node shim:
 
-There is no `record` subcommand yet. If you need one, say so rather than
-shelling out to something else.
+```sh
+dolphin-runner record --dolphin <bin> --iso <iso> --slp <game.slp> \
+  --out <dir> --user-dir <dir> --efb-scale 3 [--texture-pack <dir>] [--gecko-ini <f>]
+
+dolphin-runner play   --dolphin <bin> --iso <iso> --slp <game.slp> \
+  --user-dir <dir> [--start-frame N] [--end-frame N]      # on screen, no dump
+```
+
+One JSON line per event on stdout (`started`, `progress`, `warning`, `placed`,
+`result`, `stopping`, `exited`, `error`); SIGTERM to it kills the whole Dolphin
+tree; exit code is Dolphin's. Build it with `npm ci && npm run build` →
+`dist/cli.js`.
+
+If your driver does not consume the progress events, keeping a small Node shim
+that imports the package directly is a perfectly good choice — melee_skins did
+exactly that, deliberately.
 
 ## 7. Platform reality
 
@@ -294,13 +328,19 @@ It takes its frame range from its database and never reads the footer, so pass
 `lastFrame` (or just `endFrame`) — `record()` no longer insists on reading it.
 Its shared `workingGamesDir` needs `commPath` per worker.
 
-### melee_skins — adopted
+### melee_skins — ADOPTED, up to date 2026-10-10
 
-`tools/rec.mjs` imports the package properly and is pinned to a tag. Its
-remaining hand-rolled bit is the texture-pack copy and `HiresTextures` write
-(`rec.mjs:27-33`) — now `texturePacks: [dir]` on `buildProfile`. Since it is
-driven from Python under `xvfb-run`, the shim itself can go: call
-`dolphin-runner record` directly.
+On v0.5.1, using `texturePacks` and `resolveRealProfile` instead of its own
+pack copy and hardcoded GameSettings path. Upgrade from v0.4.0 verified
+byte-identical, audio and video.
+
+It **keeps `tools/rec.mjs` on purpose** — the Python side does not consume the
+CLI's progress events, so moving to `dolphin-runner record` would be churn for
+no gain. A thin shim that imports the package is a fine end state; the point
+was never to use the CLI, it was to stop re-implementing the spawn.
+
+It contributed the EFB 3 numbers and the boot-time finding in
+`docs/background-and-mute.md`.
 
 ### kotj — nothing to do
 

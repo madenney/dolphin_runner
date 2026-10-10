@@ -22,6 +22,12 @@ npm install slippi-dolphin-runner      # or: "file:../dolphin_runner" while loca
 Pin a tag, never a branch — and do not vendor a copy. A vendored fork that
 drifts is the exact failure this package exists to end.
 
+Two things about installing from git: **bumping the pin needs an explicit
+`npm install "github:…#vX.Y.Z"`** (editing `package.json` and running
+`npm install` keeps the old commit), and npm's **`allow-scripts` warning about
+`prepare` is harmless** — `dist/` is not committed, but npm runs the build
+while packing the git ref, so it is already there. See `MIGRATING.md` §1.
+
 ## Use
 
 ```ts

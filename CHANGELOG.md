@@ -6,6 +6,49 @@ failure mode this package exists to prevent.
 
 Until 1.0 the minor is the breaking digit: `0.x.0` may break, `0.x.y` never does.
 
+## 0.5.3 — 2026-10-10
+
+Documentation only — no code changed. Tagged so consumers pinning a version
+get the corrected guidance, since `docs/` ships in the package. All of it came
+from the melee_skins consumer's v0.4.0 → v0.5.1 upgrade (verified
+byte-identical, audio and video).
+
+**Measurements** (`docs/background-and-mute.md`), RTX 5080 + i9-12900K:
+
+- **EFB 3 (1408x792)**, the gap between the measured points: FFV1 0.50× at
+  either emulation speed (encoder-bound), utvideo 0.99× → **1.27×** with
+  `emulationSpeed 0`, mpeg4 0.99× → **1.28×** and the same at 20 and 60 Mb/s.
+- **At EFB 3 the ceiling is emulation, not the encoder.** Both non-FFV1
+  codecs stop at ~1.27×, so lossy buys nothing over lossless at that size:
+  **mpeg4's speed advantage is a native/low-resolution thing.**
+
+**Corrections**
+
+- "`emulationSpeed 0` only helps when the encoder is not the bottleneck" was
+  about *throughput*. It also shortens **boot**, whatever the codec: first
+  frame 3.8 s → 1.1 s, and a 20-frame dump 6.0 s → 3.6 s. That dominates short
+  dumps — stills, desync checks, stage shots.
+- "utvideo is bit-exact to FFV1 after 4:2:0" holds only if you do **not scale
+  first**. FFV1 dumps are bgra, so a consumer upscaling before encode
+  subsamples chroma after scaling while utvideo was subsampled at dump size;
+  the finals differ by ~44 dB. "Bit-exact" describes the dump, not your output.
+- `MIGRATING.md` §6 still said there was no `record` subcommand. It shipped in
+  0.5.0; §6 now shows `record` and `play`, and says that keeping a thin Node
+  shim is a fine end state when your driver ignores the progress events.
+
+**Install traps**, both reproduced here and now in `MIGRATING.md` §1 and the
+README:
+
+- **Bumping a pin needs an explicit `npm install "github:…#vX.Y.Z"`.** Editing
+  the tag in `package.json` and running `npm install` keeps the old commit,
+  because the lockfile still satisfies it — so §5's byte-identical check would
+  pass without the upgrade ever happening.
+- **npm's `allow-scripts` warning about `prepare` is harmless.** The reported
+  reason was wrong — `dist/` is *not* committed — but the outcome is right:
+  npm runs the build while packing the git ref, so `dist/` is already in
+  `node_modules`. Do not remove `prepare` to silence it; that script is what
+  produces `dist/` for git installs.
+
 ## 0.5.2 — 2026-10-10
 
 Everything here was reported by the Lunar consumer after migrating both its

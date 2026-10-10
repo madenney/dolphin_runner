@@ -252,6 +252,34 @@ assumption under which the quality tables above were frame-aligned holds **withi
 configuration, not across them. A consumer byte-comparing two runs must hold codec and
 speed fixed; a duration guard with a ratio (not an exact frame count) is the right check.
 
+**EFB 3 (1.5×, 1408x792), from melee_skins' rig** — RTX 5080 + i9-12900K, xvfb-run, OGL,
+1800 frames, two runs each within 1%. Speed = frames/sec ÷ 60, first frame to last.
+[measured 2026-10-10, reported by the melee_skins consumer; not reproduced here]
+
+| Dump | speed 1 | speed 0 | notes |
+|---|---|---|---|
+| FFV1 | 0.50× | 0.50× | encoder-bound; `emulationSpeed 0` does not help |
+| `utvideo` | 0.99× | **1.27×** | ~0.5 GB/min, bit-exact to FFV1 after 4:2:0 |
+| mpeg4 | 0.99× | **1.28×** | same at 20 and 60 Mb/s; 38.9 dB and 45.4 dB vs FFV1 |
+
+**At EFB 3 the ceiling is emulation, not the encoder.** utvideo and mpeg4 both stop at
+~1.27×, so lossy buys nothing over lossless at this size — **mpeg4's speed advantage is a
+native/low-resolution thing.** `emulationSpeed 0` gave identical decoded frames (ffmpeg
+framemd5) for all three codecs.
+
+**`emulationSpeed 0` also shortens BOOT, whatever the codec.** Time to the first frame went
+3.8 s → 1.1 s (EFB 3, start frame 0), and a 20-frame dump went 6.0 s → 3.6 s total on FFV1.
+So the rule "speed 0 only helps when the encoder is not the bottleneck" is about THROUGHPUT;
+boot is a flat win, and it dominates short dumps — stills, desync checks, stage shots.
+[measured 2026-10-10, melee_skins]
+
+**"utvideo is bit-exact to FFV1 after 4:2:0" holds only if you do not SCALE first.**
+[measured 2026-10-10, melee_skins] FFV1 dumps are bgra, so a consumer that upscales before
+encoding (1408 → 1920 for x264 yuv420p) subsamples chroma *after* scaling, while utvideo was
+already subsampled at the dump size. The two finals differ by ~44 dB PSNR — not visible at
+2× zoom, but not identical. If your pipeline scales, "bit-exact" describes the dump, not
+your output.
+
 **Recommendations:**
 - **Archival VOD (jungle_media): `DumpCodec=utvideo`.** It is about 8× faster than FFV1,
   near-identical in quality, and clearly better than today's mpeg4 60M. Budget about 12 GB of
