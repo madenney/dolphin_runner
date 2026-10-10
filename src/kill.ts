@@ -33,7 +33,9 @@ export function pidTree(root: number): number[] {
 export function killTree(root: number, graceful = false, escalateMs = 5000): void {
   if (isWindows) {
     try {
-      spawn("taskkill", ["/pid", String(root), "/T", "/F"], { stdio: "ignore" });
+      // A failed spawn (no taskkill on PATH) is an ASYNC 'error' event, which
+      // try/catch never sees — unhandled, it would crash the host process.
+      spawn("taskkill", ["/pid", String(root), "/T", "/F"], { stdio: "ignore" }).on("error", () => {});
     } catch {
       /* already gone */
     }

@@ -5,8 +5,9 @@ without hangs, leaked processes, or touching the user's real Dolphin profile.
 
 Zero runtime dependencies. Node ESM + TypeScript. No Electron, no slippi-js.
 
-> **Status: unconsumed.** Built standalone and tested; no project imports it yet.
-> `mirror()` is provisional and Windows is unverified at runtime — see CLAUDE.md.
+> **Status:** used by jungle_media's VOD recorder, melee_skins, and MST's
+> flag-guarded `obs-mirror` path. Windows is unverified at runtime — see CLAUDE.md.
+> Running hidden / muted, and the codec speed trade-off: [docs/background-and-mute.md](docs/background-and-mute.md).
 
 ## Install
 
@@ -52,6 +53,31 @@ const expectedSec = (res.lastFrame + 123) / 60;
 the root of the tree that owns the window (`pidTree(pid)` for the rest), e.g.
 for window parking.
 
+### Running it in the background, muted
+
+```ts
+import { BACKGROUND_RECORD, buildProfile, record } from "slippi-dolphin-runner";
+
+await buildProfile("/tmp/worker-1", {
+  ...BACKGROUND_RECORD,   // PauseOnFocusLost off, not on top, vsync off, 640x360 window
+  mode: "record",
+  efbScale: 6,            // an ENUM: 2 = native, 4 = 2x, 6 = 3x
+  silent: true,           // [DSP] Backend = "No audio output" — the WAV dump is unaffected
+  dumpCodec: "utvideo",   // lossless and ~8x faster than ffv1 at EFB 6; needs efbScale != 2
+  dolphinPath: paths.dolphinPath,
+});
+const res = await record(paths, slp, {
+  outDir, userDir: "/tmp/worker-1",
+  appName: "jm-vod-1",    // per-instance Pulse application.name (WirePlumber keys on it)
+  placement: { workspace: 9 },  // 0-based; parks THIS Dolphin's windows by pid, hands focus back
+  onWarning: (w) => log(w),     // e.g. no window manager (Xvfb), xdotool missing, not Linux
+});
+// res.placement = { status: "placed" | "partial" | "none-found" | "skipped", windows }
+```
+
+Mirror (OBS) audio is muted by ROUTING (`pulseSink`), never by volume or `silent`:
+OBS reads that sink's monitor. Why, with measurements: docs/background-and-mute.md.
+
 ### A stall is not a failure
 
 `record()` resolves even when the watchdog fires, with `stalled: true` and a
@@ -71,8 +97,11 @@ if (got < expectedSec * 0.9) throw new Error("dump is short — re-record");
 |---|---|
 | `record(paths, slp, opts)` | frame-dump → `{ avi, wav, lastFrame, stalled, diagnostic }` |
 | `obsMirror(paths, opts)` | long-lived, OBS-capturable Dolphin (obs-vkcapture GL path) → handle with `stop()` |
-| `mirror(paths, slp, opts)` | batch-mode live playback, no dump *(leftover; prefer obsMirror)* |
 | `buildProfile(userDir, opts)` | throwaway `--user` profile from a copy of the real one |
+| `BACKGROUND_RECORD` | profile preset for a recording that stays out of the way (no focus pause, not on top, no vsync, 640x360) — spread it into `buildProfile` |
+| `AUDIO_BACKENDS`, `NULL_AUDIO_BACKEND` | the `[DSP] Backend` strings Dolphin knows; anything else silently mutes, so `buildProfile` refuses it |
+| `recordEnv`, `appNameProp` | the env `record()` spawns with, pure |
+| `placeWindows(pid, opts)`, `checkPlacement(opts)` | park one process tree's windows on a workspace (Linux/X11, needs xdotool + x11-utils); for callers that spawn Dolphin themselves |
 | `healRealProfile(dolphinPath)` | force the real profile's dump flags off |
 | `dolphinStatus(paths)` | human-readable reason, or `null` |
 | `lastFrameOf(slp)` | last frame from the UBJSON footer |
@@ -91,7 +120,9 @@ dolphin-runner obs-mirror \
   [--display :1] [--pulse-sink game1] [--pulse-latency-ms 120] \
   [--vkcapture-shim <exe-override.so>] [--glcapture-lib <libobs_glcapture.so>] \
   [--fullscreen | --render-width W --render-height H [--window-x X --window-y Y]] \
-  [--emulation-speed 0] [--audio-latency-ms 60] [--shader-cache <dir>] [--gecko-ini <file>] [--real-time] \
+  [--emulation-speed 1] [--audio-latency-ms 60] [--shader-cache <dir>] [--gecko-ini <file>] [--real-time]
+  [--detach-hotkeys] [--app-name <pulse application.name>]
+  [--workspace <n, 0-based> [--placement-required]] \
   [--game-settings-id GALE01] [--gfx-backend OGL|Vulkan] [--msaa 1|2|4|8] [--fresh-profile] [--no-capture]
 ```
 
@@ -114,16 +145,17 @@ MST (jungle `apps/mst`) uses this for its mirror feeds only when
 follow; this process owns the profile, the config and the capture env.
 
 Stays in the foreground; one JSON line per event on stdout
-(`started` / `stopping` / `exited` / `error`); SIGTERM to it kills the whole
+(`started` / `warning` / `placed` / `stopping` / `exited` / `error`); SIGTERM to it kills the whole
 Dolphin tree. Re-point it by rewriting `--comm` with a new replay and
 commandId — Dolphin reloads on its own.
 
 ## Scope
 
 **In:** profile builder, comm.json, spawn, frame-watch, stall watchdog,
-kill-tree, AbortSignal, cross-OS path handling.
+kill-tree, AbortSignal, cross-OS path handling, parking the windows of a
+Dolphin it spawned (by pid — never by title).
 
-**Out:** ffmpeg mux/re-encode/concat, overlay compositing, X11 workspace parking,
+**Out:** ffmpeg mux/re-encode/concat, overlay compositing, windows we didn't spawn,
 uploads, progress UI, clip selection. Those belong to the app.
 
 ## Development

@@ -1,6 +1,8 @@
-export { record, mirror } from "./run.ts";
+export { record, recordEnv, appNameProp } from "./run.ts";
+export { placeWindows, checkPlacement, systemX11 } from "./place.ts";
+export type { X11, PlacementHandle, PlacementCheck } from "./place.ts";
 export { obsMirror, obsMirrorEnv, obsMirrorArgs, DEFAULT_GLCAPTURE_LIB } from "./obs.ts";
-export { buildProfile, healRealProfile } from "./profile.ts";
+export { buildProfile, healRealProfile, BACKGROUND_RECORD, AUDIO_BACKENDS, NULL_AUDIO_BACKEND } from "./profile.ts";
 export { dolphinStatus, dolphinConfigured } from "./status.ts";
 export { lastFrameOf } from "./slp.ts";
 export { pidTree, killTree } from "./kill.ts";
@@ -14,6 +16,12 @@ export type {
   DolphinPaths,
   RealProfile,
   ProfileMode,
+  DumpCodec,
+  AudioBackend,
+  PlacementOptions,
+  PlacementReport,
+  PlacedWindow,
+  RunnerWarning,
   ProfileOptions,
   RenderWindow,
   RunOptions,

@@ -1,13 +1,52 @@
 import { promises as fsp } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { setEverywhere, setInSection } from "./ini.ts";
+import { getInSection, setEverywhere, setInSection } from "./ini.ts";
 import { resolveRealProfile, realProfileExists } from "./paths.ts";
-import type { ProfileOptions, RealProfile } from "./types.ts";
+import type { AudioBackend, ProfileOptions, RealProfile } from "./types.ts";
 
 /** Dump flags and the sections they live in. Both sections matter for audio. */
 const MOVIE_KEYS = ["DumpFrames", "DumpFramesSilent", "DumpAudio", "DumpAudioSilent"] as const;
 const DSP_KEYS = ["DumpAudio", "DumpAudioSilent"] as const;
+
+/** Ishiiruka's null audio backend (`BACKEND_NULLSOUND`, ConfigManager.h). */
+export const NULL_AUDIO_BACKEND = "No audio output";
+
+/**
+ * Every `[DSP] Backend` string Ishiiruka knows. Dolphin falls back to the null
+ * backend on anything else — silently — so an unknown string is a mute nobody
+ * asked for, and buildProfile refuses it.
+ */
+export const AUDIO_BACKENDS: readonly AudioBackend[] = [
+  NULL_AUDIO_BACKEND,
+  "ALSA",
+  "Pulse",
+  "Cubeb",
+  "OpenAL",
+  "AOSound",
+  "CoreAudio",
+  "Exclusive WASAPI",
+  "Shared-mode WASAPI",
+  "DSound",
+  "XAudio2",
+  "OpenSLES",
+];
+
+/**
+ * What a recording that should stay out of the user's way wants, and nothing
+ * that could break a consumer: no focus pause (a parked window loses focus and
+ * would hang), not on top, no vsync gating, a small window (the dump is
+ * internal-resolution, so window size doesn't matter to it). Deliberately NOT
+ * included: `silent` (a consumer may want to hear it) and `emulationSpeed`
+ * (frame_grabber's camera sync breaks at unlimited speed). Spread it in:
+ * `buildProfile(dir, { ...BACKGROUND_RECORD, mode: "record", efbScale: 6 })`.
+ */
+export const BACKGROUND_RECORD = {
+  pauseOnFocusLost: false,
+  keepWindowOnTop: false,
+  vsync: false,
+  window: { width: 640, height: 360 },
+} as const satisfies Partial<ProfileOptions>;
 
 /**
  * Build a throwaway `--user` profile at `userDir` by COPYING the real one and
@@ -23,10 +62,19 @@ const DSP_KEYS = ["DumpAudio", "DumpAudioSilent"] as const;
  * the binary (it ships next to the AppImage/exe).
  *
  * Every ini is copied first, so anything we do not explicitly override —
- * window geometry, audio backend, and critically GFX `UseFFV1`, which keeps the
- * lossless intermediate feeding the consumer's re-encode — survives untouched.
+ * window geometry, audio backend, and critically the dump codec (`UseFFV1` /
+ * `DumpCodec`, the consumer's quality/speed choice) — survives untouched.
  */
 export async function buildProfile(userDir: string, opts: ProfileOptions & { dolphinPath?: string }): Promise<void> {
+  if (opts.silent && opts.audioBackend != null && opts.audioBackend !== NULL_AUDIO_BACKEND) {
+    throw new Error(`silent and audioBackend ${JSON.stringify(opts.audioBackend)} contradict each other`);
+  }
+  if (opts.audioBackend != null && !AUDIO_BACKENDS.includes(opts.audioBackend)) {
+    throw new Error(
+      `unknown audioBackend ${JSON.stringify(opts.audioBackend)} — Dolphin would silently fall back to ` +
+        `no audio. One of: ${AUDIO_BACKENDS.join(", ")}`,
+    );
+  }
   const src: RealProfile =
     opts.sourceProfile ??
     resolveRealProfile(opts.dolphinPath ?? "");
@@ -69,6 +117,7 @@ export async function buildProfile(userDir: string, opts: ProfileOptions & { dol
       if (opts.aspectRatio != null) gfx = setInSection(gfx, "Settings", "AspectRatio", String(opts.aspectRatio));
     }
     if (opts.efbScale != null) gfx = setInSection(gfx, "Settings", "EFBScale", String(opts.efbScale));
+    if (recording && opts.dumpCodec != null) gfx = setDumpCodec(gfx, opts.dumpCodec);
     if (opts.msaa != null) {
       gfx = setInSection(gfx, "Settings", "MSAA", String(msaaSamples(opts.msaa)));
       gfx = setInSection(gfx, "Settings", "SSAA", "False");
@@ -93,12 +142,23 @@ export async function buildProfile(userDir: string, opts: ProfileOptions & { dol
 
     // Live-window tuning. Every one of these is CREATED if absent — a real
     // profile that has never been captured has no GFXBackend line to rewrite,
-    // and a blank one is the Vulkan default that captures black.
+    // and one left on Vulkan captures black.
     if (opts.gfxBackend != null) dol = setInSection(dol, "Core", "GFXBackend", opts.gfxBackend);
     if (opts.audioLatencyMs != null) dol = setInSection(dol, "Core", "Latency", String(opts.audioLatencyMs));
     if (opts.emulationSpeed != null) dol = setInSection(dol, "Core", "EmulationSpeed", String(opts.emulationSpeed));
-    if (opts.audioBackend != null) dol = setInSection(dol, "DSP", "Backend", opts.audioBackend);
+    const backend = opts.silent ? NULL_AUDIO_BACKEND : opts.audioBackend;
+    if (backend != null) dol = setInSection(dol, "DSP", "Backend", backend);
     if (opts.volume != null) dol = setInSection(dol, "DSP", "Volume", String(opts.volume));
+    // A hidden or parked recording loses focus by design; with this True it
+    // pauses and the run dies to the watchdog (measured). Record mode forces it
+    // off unless the caller says otherwise.
+    const pauseOnFocusLost = opts.pauseOnFocusLost ?? (recording ? false : undefined);
+    if (pauseOnFocusLost != null) {
+      dol = setInSection(dol, "Interface", "PauseOnFocusLost", pauseOnFocusLost ? "True" : "False");
+    }
+    if (opts.keepWindowOnTop != null) {
+      dol = setInSection(dol, "Display", "KeepWindowOnTop", opts.keepWindowOnTop ? "True" : "False");
+    }
     if (opts.window?.fullscreen) {
       dol = setInSection(dol, "Display", "Fullscreen", "True");
     } else if (opts.window) {
@@ -127,8 +187,9 @@ export async function buildProfile(userDir: string, opts: ProfileOptions & { dol
   }
 
   // 5. Record mode isolates input. A headless worker must not grab the
-  //    operator's real controllers or hotkeys mid-batch.
-  if (recording) {
+  //    operator's real controllers or hotkeys mid-batch. Play mode can opt in:
+  //    a mirror steals focus at launch and would take the operator's keystrokes.
+  if (recording || opts.detachHotkeys) {
     await fsp.writeFile(path.join(destConfig, "Hotkeys.ini"), "[Hotkeys1]\nDevice = /0/\n");
   }
 
@@ -137,6 +198,24 @@ export async function buildProfile(userDir: string, opts: ProfileOptions & { dol
   if (opts.shaderCacheDir && os.type() !== "Windows_NT") {
     await linkShaderCache(userDir, opts.shaderCacheDir);
   }
+}
+
+/**
+ * Set the dump codec in GFX `[Settings]`. `UseFFV1` overrides `DumpCodec` in
+ * Dolphin, so both are always written. utvideo needs an even dump width and
+ * native (EFBScale 2) dumps 939 wide — Dolphin then writes no video at all,
+ * which only shows up as "produced no video" after a full-length run.
+ */
+function setDumpCodec(gfx: string, codec: string): string {
+  if (codec !== "ffv1" && codec !== "utvideo" && codec !== "mpeg4") {
+    throw new Error(`unknown dumpCodec ${JSON.stringify(codec)} — ffv1, utvideo or mpeg4`);
+  }
+  if (codec === "utvideo" && getInSection(gfx, "Settings", "EFBScale")?.trim() === "2") {
+    throw new Error("dumpCodec utvideo needs an even dump width; EFBScale 2 (native) dumps 939 wide — use ffv1 or mpeg4");
+  }
+  if (codec === "ffv1") return setInSection(gfx, "Settings", "UseFFV1", "True");
+  gfx = setInSection(gfx, "Settings", "UseFFV1", "False");
+  return setInSection(gfx, "Settings", "DumpCodec", codec);
 }
 
 /** Dolphin's valid MSAA sample counts; anything else is off (1). */

@@ -5,11 +5,13 @@ import readline from "node:readline";
 import { writeComm } from "./comm.ts";
 import { foldEnd, parseFrameLine, reachedEnd } from "./frames.ts";
 import { killTree } from "./kill.ts";
+import { checkPlacement, placeWindows, systemX11, warn, type PlacementHandle } from "./place.ts";
 import { lastFrameOf } from "./slp.ts";
 import { dolphinStatus } from "./status.ts";
 import { tailBuffer } from "./tail.ts";
 import type {
   DolphinPaths,
+  PlacementReport,
   RecordOptions,
   RecordResult,
   RunOptions,
@@ -25,9 +27,36 @@ interface SpawnPlan {
 }
 
 /**
- * Drive one Dolphin to completion. Shared by record() and mirror(): they differ
- * only in their args and in what they do with the output afterwards.
+ * The environment a recording Dolphin is spawned with. Pure, for tests.
+ * Order: inherited, then the caller's `env`, then the named options (which win).
  */
+export function recordEnv(base: NodeJS.ProcessEnv, o: Pick<RunOptions, "env" | "display" | "audioSink" | "appName">) {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(base)) if (v != null) env[k] = v;
+  Object.assign(env, o.env ?? {});
+  if (o.display) env.DISPLAY = o.display;
+  if (o.audioSink) {
+    // Pulse reads PULSE_SINK; the ALSA backend goes through pipewire's ALSA
+    // plugin, which ignores PULSE_SINK but honours PIPEWIRE_NODE (measured).
+    env.PULSE_SINK = o.audioSink;
+    env.PIPEWIRE_NODE = o.audioSink;
+  }
+  if (o.appName) env.PULSE_PROP_OVERRIDE = appNameProp(o.appName);
+  return env;
+}
+
+/**
+ * `PULSE_PROP_OVERRIDE` for a stream name. Override, not PULSE_PROP: Dolphin
+ * sets application.name itself ("dolphin-emu"), and only the override beats it.
+ */
+export function appNameProp(name: string): string {
+  if (!/^[A-Za-z0-9 _.:-]+$/.test(name)) {
+    throw new Error(`appName ${JSON.stringify(name)}: use letters, digits, space, _ . : - only`);
+  }
+  return `application.name='${name}'`;
+}
+
+/** Drive one Dolphin to completion, frame-watched. record()'s spawn loop. */
 async function runDolphin(
   paths: DolphinPaths,
   slpPath: string,
@@ -38,7 +67,7 @@ async function runDolphin(
   const frameStallMs = o.frameStallMs ?? DEFAULT_FRAME_STALL_MS;
 
   return await new Promise((resolvePromise, reject) => {
-    const env = { ...process.env, ...(o.display ? { DISPLAY: o.display } : {}) };
+    const env = recordEnv(process.env, o);
     const child = spawn(paths.dolphinPath, plan.args, { env });
     // Hand the pid out as soon as there is one (window parking, diagnostics). A
     // throwing callback is the caller's bug, never a failed run.
@@ -163,7 +192,13 @@ async function runDolphin(
   });
 }
 
-/** Frame-dump one replay. Returns the raw dump paths — muxing is the caller's job. */
+/**
+ * Frame-dump one replay. Returns the raw dump paths — muxing is the caller's job.
+ *
+ * Resolves even when the watchdog fired (`stalled: true` — judge the footage).
+ * The one watchdog case that REJECTS is a hang that left no `.avi` at all
+ * ("produced no video"): there is no footage to judge.
+ */
 export async function record(
   paths: DolphinPaths,
   slpPath: string,
@@ -201,7 +236,24 @@ export async function record(
     "--cout",
   ];
 
-  const { stalled, diagnostic } = await runDolphin(paths, slpPath, { args, commPath }, o);
+  const place = await preparePlacement(o, o.display);
+  let placing: PlacementHandle | null = null;
+  const runOpts: RecordOptions = {
+    ...o,
+    onSpawn: (pid) => {
+      // Placement first: the window must be found before it maps to never flash.
+      if (place.start) placing = place.start(pid);
+      o.onSpawn?.(pid);
+    },
+  };
+  let stalled: boolean;
+  let diagnostic: StallDiagnostic | null;
+  try {
+    ({ stalled, diagnostic } = await runDolphin(paths, slpPath, { args, commPath }, runOpts));
+  } finally {
+    (placing as PlacementHandle | null)?.stop();
+  }
+  const placement = placing ? await (placing as PlacementHandle).done : place.skipped;
 
   const avi = path.join(o.outDir, `${base}.avi`);
   const wav = path.join(o.outDir, `${base}.wav`);
@@ -213,43 +265,32 @@ export async function record(
     lastFrame,
     stalled,
     diagnostic,
+    placement,
   };
 }
 
 /**
- * Play one replay live, window on screen, no dump.
- *
- * PROVISIONAL — the signature is not locked. MST's real mirror spawn has not
- * been read yet, and its needs (workspace parking, OBS capture handoff, how a
- * mirror is stopped and restarted between games) may change the shape. Do not
- * migrate MST onto this without reading its spawn first.
+ * The pre-spawn half of placement, shared by record() and obsMirror(). Throws
+ * only when placement is `required` and can't work here; otherwise a skip is
+ * a warning plus a "skipped" report, and the Dolphin launches unparked.
  */
-export async function mirror(
-  paths: DolphinPaths,
-  slpPath: string,
-  o: RunOptions & { batch?: boolean; endFrame?: number },
-): Promise<void> {
-  if (o.signal?.aborted) throw new Error("canceled");
-  if (!existsSync(slpPath)) throw new Error(`replay not found: ${slpPath}`);
-  const why = dolphinStatus(paths);
-  if (why) throw new Error(`cannot mirror: ${why}`);
-
-  const lastFrame = lastFrameOf(slpPath);
-  const commPath = path.join(o.userDir, "comm.json");
-  writeComm(commPath, {
-    replay: slpPath,
-    startFrame: -123,
-    endFrame: o.endFrame ?? lastFrame ?? 0,
-    isRealTimeMode: true,
-  });
-
-  const args = [
-    "-i", commPath,
-    ...(o.batch === false ? [] : ["-b"]),
-    "-e", paths.isoPath,
-    "--user", o.userDir,
-    "--cout",
-  ];
-
-  await runDolphin(paths, slpPath, { args, commPath }, o);
+export async function preparePlacement(
+  o: Pick<RunOptions, "placement" | "onWarning" | "signal">,
+  runDisplay: string | undefined,
+): Promise<{ start: ((pid: number) => PlacementHandle) | null; skipped: PlacementReport | null }> {
+  const p = o.placement;
+  if (!p) return { start: null, skipped: null };
+  const display = p.display ?? runDisplay;
+  const check = await checkPlacement({ workspace: p.workspace, display });
+  if (!check.ok) {
+    if (p.required) throw new Error(`window placement required but unavailable: ${check.warning.detail}`);
+    warn(o, check.warning);
+    return { start: null, skipped: { workspace: p.workspace, status: "skipped", windows: [] } };
+  }
+  // Who has focus BEFORE Dolphin raises itself — restoreFocus hands it back.
+  const previousActive = p.restoreFocus === false ? null : await systemX11(display).activeWindow();
+  return {
+    start: (pid) => placeWindows(pid, { ...p, display, previousActive, signal: o.signal, onWarning: o.onWarning }),
+    skipped: null,
+  };
 }

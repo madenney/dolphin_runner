@@ -19,10 +19,14 @@ const USAGE = `usage:
                             [--display <:N>] [--pulse-sink <sink>] [--pulse-latency-ms <120>]
                             [--vkcapture-shim <.so>] [--glcapture-lib <.so>]
                             [--fullscreen (default) | --render-width <w> --render-height <h> [--window-x <n>] [--window-y <n>]]
-                            [--emulation-speed <0>] [--audio-latency-ms <60>]
+                            [--emulation-speed <1>] [--audio-latency-ms <60>]
                             [--shader-cache <dir>] [--gecko-ini <file>] [--game-settings-id <GALE01>]
                             [--gfx-backend <OGL|Vulkan>] [--msaa <1|2|4|8>]
                             [--fresh-profile] [--no-capture]
+                            [--detach-hotkeys] [--app-name <pulse application.name>]
+                            [--workspace <n, 0-based> [--placement-required]]
+
+events (one JSON line each): started, warning, placed, stopping, exited, error
 `;
 
 function num(v: string | undefined, name: string): number | undefined {
@@ -68,6 +72,10 @@ async function obsMirrorCmd(argv: string[]) {
       msaa: { type: "string" },
       "fresh-profile": { type: "boolean", default: false },
       "no-capture": { type: "boolean", default: false },
+      "detach-hotkeys": { type: "boolean", default: false },
+      "app-name": { type: "string" },
+      workspace: { type: "string" },
+      "placement-required": { type: "boolean", default: false },
     },
   });
 
@@ -92,6 +100,9 @@ async function obsMirrorCmd(argv: string[]) {
   if (backend != null && backend !== "OGL" && backend !== "Vulkan") {
     throw new Error(`--gfx-backend must be OGL or Vulkan, got ${JSON.stringify(backend)}`);
   }
+
+  const workspace = num(v.workspace, "workspace");
+  if (v["placement-required"] && workspace == null) throw new Error("--placement-required needs --workspace");
 
   const ac = new AbortController();
   const handle = await obsMirror(
@@ -118,11 +129,16 @@ async function obsMirrorCmd(argv: string[]) {
       msaa: num(v.msaa, "msaa"),
       freshProfile: v["fresh-profile"],
       capture: !v["no-capture"],
+      detachHotkeys: v["detach-hotkeys"],
+      appName: v["app-name"],
+      placement: workspace != null ? { workspace, required: v["placement-required"] } : undefined,
+      onWarning: (w) => emit({ event: "warning", ...w }),
       signal: ac.signal,
     },
   );
 
   emit({ event: "started", pid: handle.pid, captureName: v["capture-name"], userDir: v["user-dir"], comm: v.comm });
+  void handle.placement?.then((r) => emit({ event: "placed", ...r }));
 
   // Our death is the feed's death. Forward the signal to the whole tree.
   const onSignal = (sig: NodeJS.Signals) => {

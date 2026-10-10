@@ -14,9 +14,20 @@ re-learned the same OS-level gotchas, usually by shipping a bug first. The
 design doc that started this is `/home/matt/Projects/lm-clipper/DOLPHIN_RUNNER_DESIGN.md`
 — read §5 before changing anything in `run.ts`.
 
-**Status: standalone and unconsumed.** Nothing imports it yet. No existing
-project has been modified. Getting it correct here comes before migrating
-anyone onto it.
+**Status: standalone, barely consumed.** This is its own repo again
+(github `madenney/dolphin_runner`); it lived in the jungle monorepo as
+`packages/dolphin-runner` until 2026-10-08. Consumers, all loading it from disk
+(it is not published): jungle_media's default VOD recorder
+(`jungle/apps/media/src/lib/render/dolphinRunner.js`, via `DOLPHIN_RUNNER_DIR`),
+melee_skins (`~/Projects/sandbox/melee_skins/tools/rec.mjs`, `dist/`), and MST's
+flag-guarded `obs-mirror` CLI path (`jungle/apps/mst/src-tauri/src/dolphin.rs`;
+no MSAA option yet). Lunar's `apps/media` vendors an older copy (no `onSpawn`)
+that drifts from this one. Changes here reach live consumers — check them.
+
+Background running and muting (hiding, focus, audio, codec speed) were researched
+and tested 2026-10-08: `docs/background-and-mute.md`. Several gotchas below were
+corrected by it (19, 20, and `efbScale` being an enum); read it before touching
+window, audio or speed options.
 
 ## The extraction
 
@@ -68,26 +79,40 @@ every helper is API. Two layers:
   flags in `[Movie]` + `[DSP]`, verbatim `GALE01.ini`, and in record mode a
   `Hotkeys.ini` that detaches input). `healRealProfile` is the only write to the
   real profile.
+- `obs.ts` (pure half only) — `obsMirrorEnv()` and `obsMirrorArgs()` are
+  tested in `test/obs.test.ts`: LD_PRELOAD order, no stray colon, no `-b`/
+  `--cout`/dump flags. The spawn in `obsMirror()` is not.
 
 **Untested by the suite** (needs a process or a real Dolphin):
 - `status.ts` — `dolphinStatus(paths)` → human reason or `null`. Parameterised,
   never reads env at import.
 - `kill.ts` — `pidTree` (POSIX `pgrep -P` walk) and `killTree` (children first;
   SIGTERM→SIGKILL escalation when `graceful`; `taskkill /T /F` on Windows).
-- `run.ts` — `runDolphin()` is the single spawn loop; `record()` and `mirror()`
-  differ only in args and in what they return. `record()` = validate → write
+- `run.ts` — `runDolphin()` is the frame-watched spawn loop behind `record()`
+  (the old batch-mode `mirror()` was removed 2026-10-09; nothing used it).
+  `recordEnv()` builds its env: inherited → `env` → `display`/`audioSink`/`appName`. `record()` = validate → write
   comm.json into `outDir` → spawn with `-i comm -o base --output-directory -b
   -e iso --user userDir --hide-seekbar --cout` → readline stdout / drain stderr
   / two-tier watchdog → resolve `{ avi, wav, lastFrame, stalled, diagnostic }`.
-- `obs.ts` — `obsMirror()`: a long-lived, OBS-capturable Dolphin for a stream
+  The bounded stdout/stderr tails (gotcha 10) are `tailBuffer()` in `tail.ts`;
+  when the watchdog fires they are snapshotted into `diagnostic` (otherwise
+  `null`).
+- `obs.ts` (the spawn) — `obsMirror()`: a long-lived, OBS-capturable Dolphin for a stream
   tool. `buildProfile(mode: "play", …)` with the capture tuning forced (OGL,
   Pulse, Latency 60, fullscreen, VSync off), env from `obsMirrorEnv()`
   (LD_PRELOAD shim:existing:libobs_glcapture, OBS_VKCAPTURE*, PULSE_*), no
   `-b`, no watchdog — idling on "waiting for game" is healthy. Returns a
   handle; `stop()` SIGKILLs the tree. The caller re-points it by rewriting the
   comm file (`writeMirrorComm`); nothing here watches anything.
+- `place.ts` — `placeWindows(pid, …)`: park ONE process tree's windows on an
+  EWMH workspace (xdotool/xprop, optional system tools), plus `checkPlacement`
+  preflight. Its logic is unit-tested against a fake X server (`X11` is
+  injected); the real behaviour was measured on GNOME — see gotcha 21.
+  `record()`/`obsMirror()` take `placement: { workspace }`; never fatal unless
+  `required`.
 - `cli.ts` — `dolphin-runner obs-mirror …`, the process boundary for non-Node
-  consumers (MST is Rust). One JSON line per event on stdout; foreground until
+  consumers (MST is Rust). One JSON line per event on stdout (`started`,
+  `warning`, `placed`, `stopping`, `exited`, `error`); foreground until
   Dolphin exits; SIGINT/SIGTERM/SIGHUP forwarded to the whole tree.
 
 Only `types.ts` and the doc comments describe the contract; the JSDoc on
@@ -119,10 +144,13 @@ An Electron host that disagrees passes `sourceProfile` explicitly. A hard
 Electron dep would lock out every non-Electron consumer.
 
 **Scope is the spawn, not the pipeline.** IN: profile builder, comm.json, spawn,
-frame-watch, stall watchdog, kill-tree, AbortSignal, cross-OS paths. **OUT:**
-ffmpeg mux/re-encode/concat, overlay compositing, X11 workspace parking, uploads,
-progress UI, clip selection. Those stay in each app. If you find yourself
-importing ffmpeg here, stop.
+frame-watch, stall watchdog, kill-tree, AbortSignal, cross-OS paths, and (since
+2026-10-09) parking the windows of a Dolphin WE spawned — the spawner is the
+only code that knows the pid tree, and the copy-pasted parkers that matched by
+title grabbed other projects' Dolphins. **OUT:** ffmpeg mux/re-encode/concat,
+overlay compositing, uploads, progress UI, clip selection, and touching any
+window we didn't spawn. Those stay in each app. If you find yourself importing
+ffmpeg here, stop.
 
 **`record()` returns raw dump paths, never a muxed file.** It also returns
 `lastFrame` so the caller can length-check the dump without re-reading the `.slp`
@@ -143,8 +171,13 @@ Each of these cost somebody an event. The comments in the code say so; keep them
    flag's. Conflating them builds a profile Dolphin silently ignores. (`paths.ts`)
 4. **Dump flags live in TWO sections** — `[Movie]` and `[DSP]` both carry audio
    dump keys. `ini.ts` has `setInSection` vs `setEverywhere` for exactly this.
-5. **Preserve `UseFFV1`.** Copy-then-override means we never touch it. Dropping
-   it silently degrades the lossless intermediate feeding the consumer's encode.
+5. **Never change the dump codec behind the consumer's back.** Copy-then-override
+   means we inherit `UseFFV1`/`DumpCodec`/`BitrateKbps` from the source profile;
+   the codec is the consumer's choice, not ours. It is a big one (measured
+   2026-10-08): FFV1 is single-threaded and caps recording at 0.77× realtime at
+   native and 0.10× at EFB 6; `DumpCodec = utvideo` is ~bit-exact and 8× faster
+   at EFB 6 but needs an even width (fails at native 939x528); mpeg4 tops out
+   ~141 Mb/s and visibly blocks at 60 Mb/s. Numbers: docs/background-and-mute.md.
 6. **comm needs a FINITE `endFrame`**, or Dolphin reports `INT_MAX` and idles on
    "waiting for game" forever. `buildComm` throws rather than allow it.
 7. **Numeric `>=` for the end frame.** Not `==` (a skipped frame → never kills →
@@ -186,20 +219,38 @@ Each of these cost somebody an event. The comments in the code say so; keep them
 19. **`[Core] GFXBackend` must be `OGL` for OBS capture, and CREATED if
     absent.** obs-vkcapture's GL path preloads `libobs_glcapture.so`, which
     hooks `glXSwapBuffers`; a Vulkan Dolphin makes no GL swaps and OBS shows
-    black. A blank value is Vulkan on this box, and a never-captured profile
-    has no line to rewrite. Slippi's stock ini also carries `GFXBackend` and
+    black. Force it anyway: a blank value resolves to OGL in this build
+    (measured 2026-10-08 by mapped libs; the old "blank is Vulkan" note was
+    wrong), but a profile someone set to Vulkan stays Vulkan. Slippi's stock ini also carries `GFXBackend` and
     `EmulationSpeed` under `[Movie]` — those are movie metadata, ignore them;
     `[Core]` is the live one.
 20. **A windowed render larger than the display's work area becomes 640x480.**
-    GNOME/mutter refuses the oversize initial map and Dolphin falls back to its
-    default. 1920x1080 windowed on a 1920x1080 display captured at 640x443;
-    1280x720 landed exactly. For a 1:1 1080p capture on a 1080p display,
-    `{ fullscreen: true }` is the only option — which is why MST's mirror path
-    was fullscreen all along.
+    That is Dolphin's OWN clamp (`DolphinWX/FrameTools.cpp:679-689`, size +
+    WM decoration vs the work area of the output-tied RandR monitor), not
+    mutter's — reproduced with no WM at all. 1920x1080 windowed on a 1920x1080
+    GNOME display captured at 640x443; 1280x720 landed (captured 1280x683 —
+    decorations). On a decorated 1080p desktop `{ fullscreen: true }` is the
+    only 1:1 option. On a larger screen, undecorated 1080p tiles work — see
+    docs/background-and-mute.md.
+21. **Park by PID, and never trust a property you wrote.** Every Playback
+    window is WM_CLASS `AppRun.wrapped` with the same title, so only the pid
+    tells instances apart — title matching grabbed other projects' Dolphins.
+    On mutter, Dolphin's windows are already managed when first found (~330 ms
+    after spawn), so the pre-map `_NET_WM_DESKTOP` trick rarely wins. Writing
+    that property onto a MANAGED window does nothing, but reading it back
+    returns your own write: the first parker reported "placed" while the
+    windows sat on the user's screen for a whole run (2026-10-09). And
+    `IsViewable` is no ground truth either — mutter keeps windows on other
+    workspaces mapped; `WM_STATE` Iconic is what "hidden" looks like. Measured
+    on GNOME: ~0.6 s visible, then hidden; mutter lands the move ~0.4 s late
+    whatever you send. A parked Dolphin KEEPS keyboard focus until something
+    else takes it — `restoreFocus` hands it back (~1 s), only to a window on
+    the user's current workspace so it can't switch workspaces on them.
+    Openbox (the Jungle box) is untested.
 
 ## Known unfinished
 
-- **`obsMirror()` is the real mirror; `mirror()` is a leftover.** MST's spawn
+- **`obsMirror()` is the mirror.** MST's spawn
   (`melee_stream_tool/src-tauri/src/dolphin.rs`) was read 2026-09-19 and
   `obsMirror` reproduces it: same env, same ini keys, same comm format, no
   `-b`. Differences on purpose: profile is copy-then-override (MST wrote into a
@@ -208,8 +259,9 @@ Each of these cost somebody an event. The comments in the code say so; keep them
   hand 2026-09-19: OBS "Dolphin 2" vkcapture source rendered the instance at
   1920x1080 via GL (no libvulkan mapped), Pulse routed to `game2` under the
   shim's name. NOT yet proven: a live, growing `.slp` (only a finished one was
-  available); that path is MST's comm-rewrite loop, unchanged. `mirror()` in
-  `run.ts` can go once nothing wants a batch-mode window.
+  available); that path is MST's comm-rewrite loop, unchanged. Re-pointing a
+  PARKED mirror with a normal-mode comm was proven 2026-10-08 (new game in ~3 s,
+  same capture client); a mirror-mode comm on a FINISHED .slp idles forever.
 - **Windows is UNVERIFIED at runtime.** Path *resolution* is unit-tested; nobody
   has confirmed a Windows Playback Dolphin honours `--user` with Sys-relative-to-
   binary. Do not claim Windows support until someone runs it on a Windows box.
@@ -227,5 +279,5 @@ Dogfood first, lowest risk first. **None of this has started.**
    workspace parking and upload; only the spawn is replaced. Note it currently
    uses a persistent `data/dolphin-user`; moving to throwaway profiles is the
    upgrade, but keep `userDir` as the escape hatch.
-3. `replay_archiver`, then MST's `mirror()`.
+3. `replay_archiver`, then MST's mirror (`obsMirror` / the CLI).
 4. `slp2mp4` is Python — keep it aligned via this file, not code.

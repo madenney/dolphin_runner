@@ -4,6 +4,7 @@ import path from "node:path";
 import { writeMirrorComm } from "./comm.ts";
 import { killTree } from "./kill.ts";
 import { buildProfile } from "./profile.ts";
+import { appNameProp, preparePlacement } from "./run.ts";
 import { dolphinStatus } from "./status.ts";
 import { tailBuffer } from "./tail.ts";
 import type { DolphinPaths, ObsMirrorHandle, ObsMirrorOptions, ProfileOptions } from "./types.ts";
@@ -27,17 +28,31 @@ export function obsMirrorEnv(
   base: NodeJS.ProcessEnv,
   o: Pick<
     ObsMirrorOptions,
-    "captureName" | "glcaptureLib" | "exeOverrideShim" | "pulseSink" | "pulseLatencyMs" | "display" | "capture"
+    | "captureName"
+    | "glcaptureLib"
+    | "exeOverrideShim"
+    | "pulseSink"
+    | "pulseLatencyMs"
+    | "display"
+    | "capture"
+    | "appName"
+    | "env"
   >,
 ): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(base)) if (v != null) env[k] = v;
+  // The caller's extras go in before everything below, so capture-critical
+  // variables can't be clobbered by accident. An LD_PRELOAD here is treated as
+  // "already had" and kept in the middle of the chain.
+  Object.assign(env, o.env ?? {});
+  const inheritedPreload = env.LD_PRELOAD ?? "";
 
   const common = () => {
     env.OBS_VKCAPTURE_EXE_NAME = o.captureName;
     if (o.pulseSink) env.PULSE_SINK = o.pulseSink;
     env.PULSE_LATENCY_MSEC = String(o.pulseLatencyMs ?? DEFAULT_PULSE_LATENCY_MS);
     if (o.display) env.DISPLAY = o.display;
+    if (o.appName) env.PULSE_PROP_OVERRIDE = appNameProp(o.appName);
   };
   if (o.capture === false) {
     // Same Dolphin, no hook: nothing preloaded (an inherited preload included)
@@ -50,7 +65,7 @@ export function obsMirrorEnv(
 
   const preload = [
     o.exeOverrideShim,
-    ...(base.LD_PRELOAD ?? "").split(":").filter(Boolean),
+    ...inheritedPreload.split(":").filter(Boolean),
     o.glcaptureLib ?? DEFAULT_GLCAPTURE_LIB,
   ].filter((x): x is string => !!x);
   env.LD_PRELOAD = preload.join(":");
@@ -75,11 +90,14 @@ export function obsMirrorProfile(paths: DolphinPaths, o: ObsMirrorOptions): Prof
     audioBackend: "Pulse",
     volume: 100,
     audioLatencyMs: o.audioLatencyMs ?? DEFAULT_AUDIO_LATENCY_MS,
-    emulationSpeed: o.emulationSpeed ?? 0,
+    emulationSpeed: o.emulationSpeed ?? 1,
     window: o.window ?? DEFAULT_WINDOW,
     vsync: false,
     shaderCompilationMode: 0,
     shaderCacheDir: o.shaderCacheDir,
+    // A parked mirror loses focus by design; it must not pause on air.
+    pauseOnFocusLost: false,
+    detachHotkeys: o.detachHotkeys,
   };
 }
 
@@ -103,6 +121,8 @@ export async function obsMirror(paths: DolphinPaths, o: ObsMirrorOptions): Promi
   const why = dolphinStatus(paths);
   if (why) throw new Error(`cannot mirror: ${why}`);
   if (!Number.isFinite(o.efbScale) || o.efbScale <= 0) throw new Error("efbScale is required");
+
+  const place = await preparePlacement(o, o.display);
 
   mkdirSync(o.userDir, { recursive: true });
   await buildProfile(o.userDir, obsMirrorProfile(paths, o));
@@ -148,10 +168,16 @@ export async function obsMirror(paths: DolphinPaths, o: ObsMirrorOptions): Promi
     child.once("error", reject);
   });
 
+  // Straight after spawn: windows must be caught before they map.
+  const placing = place.start ? place.start(child.pid!) : null;
+  if (placing) void exited.finally(() => placing.stop()).catch(() => {});
+  const placement = placing ? placing.done : place.skipped ? Promise.resolve(place.skipped) : null;
+
   return {
     pid: child.pid!,
     env,
     exited,
+    placement,
     async stop() {
       killTree(child.pid!, false);
       await exited.catch(() => {});

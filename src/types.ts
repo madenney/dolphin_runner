@@ -18,18 +18,44 @@ export interface RealProfile {
 
 export type ProfileMode = "record" | "play";
 
+export type DumpCodec = "ffv1" | "utvideo" | "mpeg4";
+
 export type RenderWindow =
   | { fullscreen: true }
   | { fullscreen?: false; width: number; height: number; x?: number; y?: number };
 
 export interface ProfileOptions {
   mode: ProfileMode;
-  /** Internal-resolution multiplier. Omit to keep whatever the source profile says. */
+  /**
+   * `[Settings] EFBScale` — an ENUM, not a multiplier (Ishiiruka `VideoConfig.h`):
+   * 0 = auto, 1 = auto-integral (window-sized — huge dumps), 2 = 1x native
+   * (939x528 dump at 16:9), 3 = 1.5x, 4 = 2x, 5 = 2.5x, 6 = 3x, 7 = 4x, 8 = 5x.
+   * Omit to keep whatever the source profile says (see gotcha 17).
+   */
   efbScale?: number;
   /** 6 = Force16:9 (widescreen), 5 = Force4:3. Omit to keep the source value. */
   aspectRatio?: 5 | 6;
-  /** Dump bitrate in kbps. Omit to keep the source value. Record mode only. */
+  /**
+   * Dump bitrate in kbps. Omit to keep the source value. Record mode only.
+   * Only the mpeg4 codec reads it, and mpeg4 stops improving at ~141 Mb/s at
+   * EFB 6 and ~37 Mb/s at native (qmin ceiling) — more is just bigger files.
+   */
   bitrateKbps?: number;
+  /**
+   * The frame-dump codec. Record mode only. Omit to keep the source profile's
+   * (`UseFFV1` / `DumpCodec`), which is today's behaviour.
+   *
+   * Dolphin encodes on ONE thread and that thread is the recording speed limit
+   * (measured 2026-10-08, RTX 5080, docs/background-and-mute.md):
+   * - "ffv1": lossless. 0.77x realtime at native, 0.10x at EFB 6.
+   * - "utvideo": lossless (bit-exact to ffv1 after 4:2:0). 0.81x at EFB 6, but
+   *   ~12 GB per 75 s game there. Needs an EVEN dump width — fails at native
+   *   (939 wide), so it is refused for efbScale 2.
+   * - "mpeg4": lossy, `bitrateKbps` applies. Fast at native (3.6x with
+   *   emulationSpeed 0) but visible blocking at 60 Mb/s at EFB 6.
+   * Never "h264": it drops the last ~50 frames (lookahead unflushed at SIGTERM).
+   */
+  dumpCodec?: DumpCodec;
   /**
    * RAW `GALE01.ini` text, written verbatim into the throwaway profile.
    *
@@ -61,9 +87,11 @@ export interface ProfileOptions {
   /**
    * `[Core] GFXBackend`. MUST be "OGL" for obs-vkcapture's GL path: its
    * LD_PRELOAD hooks glXSwapBuffers, so a Vulkan Dolphin makes no GL swaps and
-   * OBS captures BLACK. A blank value means Vulkan on at least one box.
+   * OBS captures BLACK. A blank value resolves to OGL on Linux (measured
+   * 2026-10-08); set it anyway so a profile left on Vulkan can't win. These
+   * are the only two on Linux — Playback has no software or null renderer.
    */
-  gfxBackend?: "OGL" | "Vulkan" | "Software Renderer" | "Null";
+  gfxBackend?: "OGL" | "Vulkan";
   /**
    * `[Core] Latency` — audio buffer headroom in ms. MUST NOT be 0 for a live
    * feed: a cold launch stalls audio during ISO load + shader compile, the
@@ -74,18 +102,52 @@ export interface ProfileOptions {
   audioLatencyMs?: number;
   /** `[Core] EmulationSpeed`. 1 = real time, 0 = unlimited. */
   emulationSpeed?: number;
-  /** `[DSP] Backend`. "Pulse" is the one that honours PULSE_SINK for routing. */
-  audioBackend?: string;
-  /** `[DSP] Volume`, 0–100. Slippi ships 25. */
+  /**
+   * `[DSP] Backend`. "Pulse" is the one that honours PULSE_SINK for routing;
+   * "ALSA" ignores PULSE_SINK (PIPEWIRE_NODE does route it). Must be one of
+   * `AUDIO_BACKENDS` — Dolphin silently falls back to NO AUDIO on any string it
+   * doesn't know, so a typo would mute with no warning; we throw instead.
+   */
+  audioBackend?: AudioBackend;
+  /**
+   * Mute Dolphin: `[DSP] Backend = "No audio output"`. The audio DUMP is
+   * unaffected — it is written from the mixer before any backend (measured:
+   * WAV bit-identical to ALSA/Pulse runs) — so this is the mute for RECORDING.
+   * Never for an OBS mirror: OBS hears nothing. Conflicts with `audioBackend`.
+   */
+  silent?: boolean;
+  /**
+   * `[DSP] Volume`, 0–100. Slippi ships 25. Does NOTHING on Linux: the Pulse
+   * and ALSA backends never implement SetVolume (measured: same RMS at 0 and
+   * 100), and it never affects the dump. To mute, use `silent` (recording) or
+   * route a mirror to its own sink.
+   */
   volume?: number;
+  /**
+   * `[Interface] PauseOnFocusLost`. A hidden or parked Dolphin loses focus by
+   * design, and with True it pauses: measured, a recording that lost focus
+   * after boot never emitted a frame and died to the watchdog. Record mode
+   * FORCES False unless you set it; play mode keeps the copy's value.
+   */
+  pauseOnFocusLost?: boolean;
+  /** `[Display] KeepWindowOnTop`. False for anything meant to stay out of the way. */
+  keepWindowOnTop?: boolean;
+  /**
+   * Write a Hotkeys.ini bound to no device, so a Dolphin that steals focus at
+   * launch (it always raises itself) can't receive the operator's keystrokes.
+   * Record mode always does this; for play mode it is opt-in.
+   */
+  detachHotkeys?: boolean;
   /**
    * The render window. `{ fullscreen: true }` takes the display's resolution.
    * A fixed size sets `Fullscreen=False`, `RenderWindowAutoSize=False` and
-   * the geometry — but it MUST FIT THE DISPLAY'S WORK AREA: GNOME/mutter
-   * refuses an initial map larger than that and Dolphin falls back to its
-   * 640x480 default (measured 2026-09-19: 1920x1080 windowed on a 1920x1080
-   * display captured at 640x443; 1280x720 landed exactly). For a 1:1 capture
-   * on a 1080p canvas, fullscreen is the only option on a 1080p display.
+   * the geometry — but size + WM decorations MUST FIT the work area of the
+   * output-tied RandR monitor: Dolphin itself (not the WM — reproduced with no
+   * WM, 2026-10-08) resets anything larger to 640x480, and clamps off-screen
+   * positions back on. 1920x1080 windowed on a decorated 1080p GNOME display
+   * became 640x480; 1280x720 landed but captured 1280x683. On a decorated 1080p
+   * desktop fullscreen is the only 1:1 option; on a larger screen, undecorated
+   * 1080p tiles keep their exact geometry.
    */
   window?: RenderWindow;
   /**
@@ -105,6 +167,77 @@ export interface ProfileOptions {
    * cold (audio-stalling) recompile. Best-effort; a failure never fails the build.
    */
   shaderCacheDir?: string;
+}
+
+/** Every `[DSP] Backend` value Ishiiruka knows (ConfigManager.h). */
+export type AudioBackend =
+  | "No audio output"
+  | "ALSA"
+  | "Pulse"
+  | "Cubeb"
+  | "OpenAL"
+  | "AOSound"
+  | "CoreAudio"
+  | "Exclusive WASAPI"
+  | "Shared-mode WASAPI"
+  | "DSound"
+  | "XAudio2"
+  | "OpenSLES";
+
+/**
+ * Something the runner chose not to do, or couldn't, that did NOT fail the run.
+ * Delivered through `onWarning`; the CLI prints it as `{"event":"warning"}`.
+ */
+export interface RunnerWarning {
+  code:
+    | "placement-unsupported" // not Linux, no DISPLAY, tools missing, bad workspace number
+    | "placement-no-wm" // no EWMH window manager (Xvfb): nothing to park
+    | "placement-no-workspace" // that workspace doesn't exist on this display
+    | "placement-ignored"; // the WM left some window elsewhere after retries
+  detail: string;
+}
+
+/** Park a Dolphin's windows on another workspace. See `placeWindows` (place.ts). */
+export interface PlacementOptions {
+  /** EWMH workspace, 0-BASED (GNOME's "Workspace 10" is 9). Never created — must exist. */
+  workspace: number;
+  /** X display; defaults to the run's `display`, then DISPLAY. */
+  display?: string;
+  /** How long to keep watching for windows. Default 20 s. */
+  timeoutMs?: number;
+  /**
+   * Default true. A parked Dolphin keeps keyboard focus (it raises itself at
+   * launch), so typing goes to a window you can't see. Once parked, focus is
+   * handed back to the window that had it before the launch — only if that
+   * window is on your current workspace, so it never switches workspaces.
+   */
+  restoreFocus?: boolean;
+  /**
+   * Default false: if placement can't work here (no X tools, no WM, not
+   * Linux) the run goes ahead with the window where Dolphin puts it, and
+   * `onWarning` says why. True refuses to spawn instead.
+   */
+  required?: boolean;
+  signal?: AbortSignal;
+  onWarning?: (w: RunnerWarning) => void;
+}
+
+export interface PlacedWindow {
+  /** X window id as xdotool prints it (decimal). */
+  id: string;
+  /** Its workspace when placement finished, null if the WM didn't say. */
+  desktop: number | null;
+}
+
+export interface PlacementReport {
+  workspace: number;
+  /**
+   * "placed": every mapped window is on `workspace`. "partial": some aren't
+   * (also warned). "none-found": no window mapped before the timeout or exit.
+   * "skipped": placement couldn't run here (see the warning).
+   */
+  status: "placed" | "partial" | "none-found" | "skipped";
+  windows: PlacedWindow[];
 }
 
 export interface StallDiagnostic {
@@ -149,6 +282,33 @@ export interface RunOptions {
   bootStallMs?: number;
   /** Frames stopped for this long mid-record = frozen. */
   frameStallMs?: number;
+  /**
+   * Extra environment for the Dolphin process, on top of ours. `display`,
+   * `audioSink` and `appName` are applied after it and win.
+   */
+  env?: Record<string, string>;
+  /**
+   * Route this Dolphin's live audio to a sink by name: sets PULSE_SINK (Pulse
+   * backend) and PIPEWIRE_NODE (ALSA via pipewire's ALSA plugin, which ignores
+   * PULSE_SINK). For keeping a recording's live audio off the speakers while
+   * still hearing it somewhere; `silent` is the simpler mute. Linux only.
+   */
+  audioSink?: string;
+  /**
+   * Park this Dolphin's windows on another workspace (Linux/X11), found BY PID
+   * — never by title. Omit to leave them where Dolphin puts them (today's
+   * behaviour). See PlacementOptions; `display` defaults to this run's.
+   */
+  placement?: Omit<PlacementOptions, "display" | "signal" | "onWarning"> & { display?: string };
+  /** Non-fatal things the runner skipped or couldn't do (placement today). */
+  onWarning?: (w: RunnerWarning) => void;
+  /**
+   * The audio stream's `application.name` (PULSE_PROP_OVERRIDE; Pulse backend
+   * only). Every Dolphin otherwise calls itself "dolphin-emu", and WirePlumber
+   * remembers volume, mute and target BY THAT NAME — mute one by hand and every
+   * future Dolphin starts muted. A per-instance name scopes all of that.
+   */
+  appName?: string;
 }
 
 export interface RecordOptions extends RunOptions {
@@ -221,7 +381,11 @@ export interface ObsMirrorOptions {
    * to get a 1920x1080 surface on a 1920x1080 display (see RenderWindow).
    */
   window?: RenderWindow;
-  /** Default 0 (unlimited) — a mirror is paced by the growing .slp, not the clock. */
+  /**
+   * Default 1 (real time). 0 = unlimited would fast-forward on air whenever the
+   * mirror is pointed at a finished or partly-written replay, with crackling
+   * Pulse audio. (Before 2026-10-09 the default was 0; MST always passed 1.)
+   */
   emulationSpeed?: number;
   /** Default 60. */
   audioLatencyMs?: number;
@@ -236,6 +400,16 @@ export interface ObsMirrorOptions {
   freshProfile?: boolean;
   /** See ProfileOptions.gameSettingsId. */
   gameSettingsId?: string;
+  /** See ProfileOptions.detachHotkeys. Off by default for parity with MST. */
+  detachHotkeys?: boolean;
+  /** See RunOptions.appName. Pulse `application.name` for this feed. */
+  appName?: string;
+  /** Extra environment, applied before the capture variables (which win). */
+  env?: Record<string, string>;
+  /** See RunOptions.placement. Parked mirrors still capture (measured, fullscreen and windowed). */
+  placement?: Omit<PlacementOptions, "display" | "signal" | "onWarning"> & { display?: string };
+  /** See RunOptions.onWarning. */
+  onWarning?: (w: RunnerWarning) => void;
 }
 
 export interface ObsMirrorHandle {
@@ -246,6 +420,8 @@ export interface ObsMirrorHandle {
   exited: Promise<{ code: number | null; signal: NodeJS.Signals | null; stderrTail: string[] }>;
   /** Kill the whole tree (SIGKILL — a mirror has nothing to finalise) and wait. */
   stop(): Promise<void>;
+  /** Resolves when window placement finishes; null if none was asked for. */
+  placement: Promise<PlacementReport> | null;
 }
 
 export interface RecordResult {
@@ -259,4 +435,6 @@ export interface RecordResult {
   /** True if the watchdog fired. NOT a verdict — judge the footage. */
   stalled: boolean;
   diagnostic: StallDiagnostic | null;
+  /** How window placement went; null if none was asked for. */
+  placement: PlacementReport | null;
 }
