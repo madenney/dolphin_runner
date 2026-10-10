@@ -1,7 +1,7 @@
 # Handoff prompts
 
 One per consuming project, to paste into that project's own Claude session.
-Written 2026-10-10 against `slippi-dolphin-runner` **v0.5.2**.
+Written 2026-10-10 against `slippi-dolphin-runner` **v0.5.3**.
 
 The migrations are the deliverable; the package is not. Do them in this order
 (lowest risk first), and do not edit these projects from the dolphin_runner
@@ -24,6 +24,16 @@ and `CHANGELOG.md` in `~/Projects/dolphin_runner`.
   ships an NSIS build.
 - **A growing `.slp` through `obsMirror` has never been tested.** Only finished
   replays were available. Matters for MST.
+- **Bumping a pin needs an explicit install.** Editing the tag in
+  `package.json` and running `npm install` keeps the OLD commit — reproduced
+  2026-10-10. Use `npm install "github:madenney/dolphin_runner#v0.5.3"` and
+  check `node -p "require('./node_modules/slippi-dolphin-runner/package.json').version"`.
+  Otherwise a byte-identical verification can pass without the upgrade ever
+  happening.
+- **npm's `allow-scripts` warning about `prepare` is harmless.** `dist/` is
+  not committed, but npm runs the build while packing the git ref, so it is
+  already in `node_modules`. Do not remove `prepare` to silence it — that
+  script is what produces `dist/`.
 - **Pin a tag, never a branch, and never vendor a copy.** A vendored fork that
   drifts is the exact failure this package exists to end — it has already
   happened once.
@@ -40,19 +50,29 @@ Measured on an RTX 5080 against a 75.1 s replay (`docs/background-and-mute.md`
 has the full tables; `EmulationSpeed=0` output is **bit-identical** to real
 time):
 
-| | EFB 6 (3×, 2816x1584) | EFB 4 (2×, 1878x1056) | EFB 2 (native, 939x528) |
-|---|---|---|---|
-| FFV1 | **0.10×** — 12 min/game | 0.34× | 0.77–0.95× |
-| `utvideo` | **0.81×**, bit-exact, ~12 GB/game | **1.81×**, ~3.1 GB/min | fails (odd width) |
-| mpeg4 60 Mb/s | 0.93×, **visible blocking** | — | — |
-| mpeg4 ≥150 Mb/s | 0.74×, caps ~141 Mb/s | 1.66×, 42.3 dB | ~4× with speed 0, −6 dB |
-| `h264` | **never** — drops the last ~52 frames at SIGTERM | never | never |
+| | EFB 6 (2816x1584) | EFB 4 (1878x1056) | EFB 3 (1408x792) | EFB 2 (native, 939x528) |
+|---|---|---|---|---|
+| FFV1 | **0.10×** — 12 min/game | 0.34× | 0.50× | 0.77–0.95× |
+| `utvideo` | **0.81×**, ~12 GB/game | **1.81×**, ~3.1 GB/min | 1.27× | fails (odd width) |
+| mpeg4 60 Mb/s | 0.93×, **visible blocking** | — | 1.28× | — |
+| mpeg4 ≥150 Mb/s | 0.74×, caps ~141 Mb/s | 1.66×, 42.3 dB | 1.28× | ~4× with speed 0, −6 dB |
+| `h264` | **never** — drops the last ~52 frames at SIGTERM | never | never | never |
 
-EFB 6 and EFB 2 were measured on an RTX 5080; EFB 4 and the native figures on
-an RTX 3060 (Lunar's rig). The encoder is CPU-bound, so these track the CPU,
-not the GPU. **Dumps are not frame-count stable across codec and speed**
-(3504–3534 frames of an expected 3600), so a byte-comparison must hold both
-fixed, and a duration guard should use a ratio rather than an exact count.
+Three things that are easy to get wrong:
+
+- **mpeg4's speed advantage is a native/low-resolution thing.** At EFB 3
+  utvideo and mpeg4 both stop at ~1.27× — the ceiling there is *emulation*,
+  not the encoder — so lossy buys nothing over lossless at that size.
+- **`emulationSpeed: 0` also shortens boot**, whatever the codec (first frame
+  3.8 s → 1.1 s). The "only helps when the encoder isn't the bottleneck" rule
+  is about throughput; for short dumps (stills, stage shots) boot dominates.
+- **Dumps are not frame-count stable across codec and speed** (3504–3534
+  frames of an expected 3600), so a byte-comparison must hold both fixed and a
+  duration guard should use a ratio, never an exact count.
+
+EFB 6 and EFB 2 were measured on an RTX 5080, EFB 4 on an RTX 3060, EFB 3 on a
+5080 + i9-12900K. The encoder is CPU-bound, so these track the CPU, not the
+GPU — treat them as ratios to each other, not absolutes for your box.
 
 Three in parallel: FFV1 0.32× aggregate, utvideo 2.07×, mpeg4 2.13×.
 
@@ -79,7 +99,7 @@ _Both apps migrated and verified byte-identical (`apps/media` dc5711c,
 
 > You're working in `~/Projects/lunar`. **Two** apps here spawn Slippi Playback
 > Dolphin, and both should end up on `slippi-dolphin-runner`
-> (`madenney/dolphin_runner`, pin **`#v0.5.2`**):
+> (`madenney/dolphin_runner`, pin **`#v0.5.3`**):
 >
 > - **`apps/media`** (`lunar_media`) — already uses the package, but through a
 >   **vendored copy** that has drifted.
@@ -256,7 +276,7 @@ _Both apps migrated and verified byte-identical (`apps/media` dc5711c,
 
 > You're working in `~/Projects/jungle`. Two apps here drive Slippi Playback
 > Dolphin and both should end up fully on `slippi-dolphin-runner`
-> (`madenney/dolphin_runner`, pin **`#v0.5.2`**):
+> (`madenney/dolphin_runner`, pin **`#v0.5.3`**):
 >
 > - **`apps/media`** — the VOD recorder. Already uses the package, but loads it
 >   from a loose checkout and still hand-rolls a lot it now owns.
@@ -283,7 +303,7 @@ _Both apps migrated and verified byte-identical (`apps/media` dc5711c,
 > First, a hazard: `src/lib/render/dolphinRunner.js:40` loads `dist/index.js`
 > in preference to `src/`, and `dist/` is a gitignored build artifact. **A
 > `npm run build` in the dolphin_runner checkout silently changes this app's
-> behaviour.** Point it at a pinned checkout or a real dependency (**v0.5.2**).
+> behaviour.** Point it at a pinned checkout or a real dependency (**v0.5.3**).
 >
 > Delete and replace:
 > - your `xdotool` parking loop (`dolphinShared.js:75`) → `placement: { workspace }`.
@@ -377,7 +397,7 @@ _Both apps migrated and verified byte-identical (`apps/media` dc5711c,
 ## 3. replay_archiver
 
 > You're working in `~/Projects/replay_archiver`. Migrate its Dolphin launching
-> onto `slippi-dolphin-runner` (`madenney/dolphin_runner`, pin **`#v0.5.2`**).
+> onto `slippi-dolphin-runner` (`madenney/dolphin_runner`, pin **`#v0.5.3`**).
 > It's Node ESM, so import it directly. Read `MIGRATING.md` in that repo — §2
 > is the checklist, §8 has a replay_archiver section.
 >
@@ -429,7 +449,7 @@ _Both apps migrated and verified byte-identical (`apps/media` dc5711c,
 >
 > Two things to do, plus one to consider.
 >
-> **1. Bump the pin.** `package.json` is on `#v0.4.0`; current is **`#v0.5.2`**.
+> **1. Bump the pin.** `package.json` is on `#v0.4.0`; current is **`#v0.5.3`**.
 > Nothing between those is a breaking change (see `CHANGELOG.md` — 0.4.0 was
 > the breaking one), but record mode now pins `DumpFormat = avi` /
 > `DumpFramesAsImages = False` and writes `EFBScale` under `[Hacks]` as well as
