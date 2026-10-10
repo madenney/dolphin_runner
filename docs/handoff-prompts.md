@@ -115,79 +115,158 @@ on air with crackling audio.
 > the source profile instead. Note **Windows is unverified at runtime** in this
 > package; you ship an NSIS build, so test there before releasing.
 
-## 2. Lunar — `apps/media` (and note `apps/clipper`)
+## 2. Lunar — the whole repo (`apps/media` **and** `apps/clipper`)
 
-> You're working in `~/Projects/lunar`. Two apps in this repo spawn Slippi
-> Playback Dolphin; this task is **`apps/media`**. Read the note about
-> `apps/clipper` at the end before you start, so you don't half-migrate the repo.
+> You're working in `~/Projects/lunar`. **Two** apps here spawn Slippi Playback
+> Dolphin, and both should end up on `slippi-dolphin-runner`
+> (`madenney/dolphin_runner`, pin **`#v0.5.1`**):
 >
-> `apps/media/src/vendor/dolphin-runner/` is a **vendored copy** of
-> `slippi-dolphin-runner` pinned to an old commit. Delete it and depend on the
-> real package (`madenney/dolphin_runner`, pin **`#v0.5.1`**). Its own README
-> already says not to edit it in place.
+> - **`apps/media`** (`lunar_media`) — already uses the package, but through a
+>   **vendored copy** that has drifted.
+> - **`apps/clipper`** (`lm-clipper`) — does not use it at all, and still
+>   carries two bugs the package exists to fix.
 >
-> Read `MIGRATING.md` §8 in `~/Projects/dolphin_runner` — it has a Lunar
-> section listing exactly what your fork is missing and which of your
-> workarounds it makes unnecessary.
+> There are no npm workspaces here, so each app takes the dependency in its own
+> `package.json`. **Do not vendor it again** — a vendored fork that drifts is
+> the exact failure this package exists to end, and `apps/media` is the proof.
+> Pin the tag, not a branch.
 >
-> Your fork lacks all of `place.ts`, `onSpawn`, `recordEnv`,
-> `BACKGROUND_RECORD`, `dumpCodec`, `silent`, `pauseOnFocusLost`,
-> `freshProfile`, `gameSettingsId`. It still carries the removed `mirror()`,
-> the `emulationSpeed ?? 0` default that fast-forwards a mirror on air, and a
-> `taskkill` spawn with no `error` handler that would crash the host. Nothing
-> in it is a local improvement worth keeping.
+> Read `MIGRATING.md` in `~/Projects/dolphin_runner` first: §2 is the
+> delete-this checklist, §5 is how to verify, and §8 has sections for both
+> Lunar and lm-clipper. `README.md` is the API reference; `CHANGELOG.md` covers
+> what broke between versions.
 >
-> Then delete these, which the current version makes unnecessary:
+> Do `apps/media` first — it is smaller and half-done already — then
+> `apps/clipper`.
+>
+> ### Part A — `apps/media`: delete the vendored fork
+>
+> `apps/media/src/vendor/dolphin-runner/` is a verbatim copy of an old commit,
+> imported by `src/studio/steps/record.js:10`. Replace it with a real
+> dependency. Its own README already says not to edit it in place.
+>
+> What that fork is missing: all of `place.ts` (so no window parking at all),
+> `onSpawn`, `recordEnv`, `BACKGROUND_RECORD`, `dumpCodec`, `silent`,
+> `pauseOnFocusLost`, `freshProfile`, `gameSettingsId`. It still carries the
+> removed `mirror()`, the `emulationSpeed ?? 0` default that fast-forwards a
+> mirror on air, and a `taskkill` spawn with no `error` handler that would
+> crash the host process. Nothing in it is a local improvement worth keeping.
+>
+> Then delete these workarounds, which the current version makes unnecessary:
 > - `scanLastFrame`/`withLastFrame` (`src/studio/steps/record.js:97-132`). You
 >   **rewrite the replay file** because `lastFrameOf` returned null on
->   anonymised ranked replays. That fallback is now built in (it walks the raw
->   event stream; verified against 429 real replays — 428 identical to the
->   footer, one 1 frame higher), and `record()` also accepts `lastFrame` or
+>   anonymised ranked replays. That fallback is now built in — it walks the raw
+>   event stream, verified against 429 real replays (428 identical to the
+>   footer, one 1 frame higher) — and `record()` also accepts `lastFrame`, or
 >   just `endFrame`.
-> - The GFX re-patching at `record.js:189-195` — `DumpFormat`,
+> - The GFX re-patching at `record.js:189-195`. `DumpFormat`,
 >   `DumpFramesAsImages`, `HiresTextures` and `EFBScale`-in-every-section are
->   all `buildProfile` options now (`setEverywhere('EFBScale', …)` at `:194`
->   in particular: the package writes `[Hacks]` too).
+>   all `buildProfile` options now; the package writes `[Hacks]` EFBScale too,
+>   so `setEverywhere('EFBScale', …)` at `:194` can go.
 > - The hard-timeout AbortController (`:149`) → `hardTimeoutMs`, which SIGTERMs
 >   and **resolves** with `stalled: true` instead of rejecting and throwing the
 >   partial dump away.
 >
-> Keep your ffprobe duration guard (`:270`) — it's the model for what every
-> consumer should do with `stalled`. Your `nice`/`ionice` wrapper script
-> (`media.js:40`) still has no option in the package; keep generating it, or
-> raise it upstream.
+> Keep your ffprobe duration guard (`:270`) — it is the model for what every
+> consumer should do with `stalled`, and the other apps should copy it. Your
+> `nice`/`ionice` wrapper script (`media.js:40`) still has no option in the
+> package; keep generating it, or raise it upstream.
 >
-> **Speed — read the caveat, the numbers do not transfer directly.** Dolphin
-> encodes the dump on ONE thread and never tunes the encoder, so the codec is
-> the speed choice. You run `DEFAULT_EFB_SCALE = 4` (2×, 1878x1056) with
-> `UseFFV1 = False` and `bitrateKbps: 60000`. The upstream measurements were
-> taken at **EFB 6 and EFB 2, not EFB 4**, so treat the ratios as directional:
-> - At EFB 6, mpeg4 at 60 Mb/s measured 0.93× realtime but showed **visible
->   blocking on fast frames**, and mpeg4 caps out around 141 Mb/s. If you are
->   keeping mpeg4, raise `bitrateKbps` to 150000; 60000 is the one value
->   measured to look bad.
-> - `dumpCodec: "utvideo"` is near-lossless (bit-exact after 4:2:0 at EFB 6)
->   and about 8× faster than FFV1 there. It needs an **even dump width**, and
->   yours is 1878, so it should work — but **utvideo at EFB 4 is unmeasured**.
->   Try it, compare a dump against an FFV1 dump of the same replay, and budget
->   scratch disk (it was ~12 GB/game at EFB 6, so expect several GB at EFB 4).
-> - `emulationSpeed: 0` is bit-identical output, but only helps when the
->   encoder is not already the bottleneck — at your resolution it probably is.
-> - Never `dumpCodec: "h264"`: it drops the last ~52 frames at SIGTERM.
+> ### Part B — `apps/clipper`: a full migration
 >
-> Verify the swap by byte-comparing one render's dump before and after
-> (`MIGRATING.md` §5), and report back any ratio you measure at EFB 4 — nobody
-> has that number yet.
+> This is lm-clipper's codebase. Three spawn sites, mapping to **two different
+> functions**:
+> - recording (`src/main/slpToVideo.ts:480`) → `buildProfile({mode:"record"})`
+>   + `record()`
+> - clip preview (`src/main/managers/VideoManager.ts:1091`) and "Test Dolphin"
+>   (`:1293`) → `buildProfile({mode:"play"})` + **`play()`**, a frame range on
+>   screen with no dump. It keeps `--cout`, so you can delete the 1-second
+>   no-frame stale timer (`VideoManager.ts:1131`) you use to guess a clip has
+>   finished — the end is detected numerically.
 >
-> **`apps/clipper` is a separate, un-migrated consumer.** It is a copy of
-> lm-clipper's code and spawns Dolphin itself at `src/main/slpToVideo.ts:480`,
-> `src/main/managers/VideoManager.ts:1091` and `:1293`. It still has the
-> substring end-frame bug (`line.includes('[CURRENT_FRAME] 845')` matches
-> inside `8454` and truncates a dump to a tenth) and a kill that only reaches
-> the direct child, so the AppImage's emulator survives every cancel. It is
-> **out of scope for this task** — migrating it is the same job as lm-clipper,
-> which has its own prompt. Don't start it without checking whether
-> `apps/clipper` and `~/Projects/lm-clipper` are meant to stay in sync.
+> Delete, don't port:
+> - The end-frame match at `slpToVideo.ts:314` and `VideoManager.ts:1159`:
+>   `line.includes(\`[CURRENT_FRAME] ${endFrame}\`)` is a **substring** test, so
+>   `845` matches inside `8454` and truncates the dump to a tenth. The package
+>   compares numerically with `>=`.
+> - `VideoManager.ts:1138`'s `chunk.split('\r\n')` — Dolphin on Linux emits
+>   `\n`, so that never splits at all. (`slpToVideo.ts:301` already uses
+>   `readline`, which is right; the package does the same.)
+> - `killTree` (`slpToVideo.ts:~215-240`): on POSIX it only reaches the direct
+>   child, and the AppImage `exec`s, so the real emulator survives every
+>   cancel, holding the GPU and the user dir. `killTree()` walks `pgrep -P`
+>   children-first. Its `taskkill` spawn also has no `error` handler.
+> - `buildWorkerProfile` (`:1471`) and `buildPlaybackProfile` (`:1590`) →
+>   `buildProfile`. Yours only rewrites ini lines that already exist (see
+>   `:1504`), so a profile that has never dumped has no
+>   `InternalResolutionFrameDumps` line and silently records at **window**
+>   resolution, with nothing downstream able to tell.
+> - The unbounded `dolphinStderr += chunk` (`slpToVideo.ts:486`,
+>   `VideoManager.ts:1097`) → a bounded tail, inside.
+> - `setDolphinDumping(config, false)` (`:1662`) → `healRealProfile()`.
+>
+> Keep: the ffmpeg chain, the worker pool and retries, overlay rendering,
+> length-scaled ffmpeg timeouts, filename resolution, all IPC/progress.
+>
+> Two options to pass that you don't today:
+> - **`commPath`** — your N workers share one `outputDir` and the package's
+>   default comm filename is fixed, so they would overwrite each other's comm
+>   between the write and Dolphin's read, and each would record the other's
+>   replay with no error anywhere.
+> - **`texturePacks`** + `cacheHiresTextures: false`, instead of symlinking
+>   packs into `Load/Textures/GALE01/` yourself.
+>
+> One thing you lose: `record()` always passes `-b`, so the `config.fullscreen`
+> toggle has no equivalent on the record path. Raise it rather than working
+> around it.
+>
+> ### Speed — different answer per app
+>
+> Dolphin encodes the dump on **one thread** and never tunes the encoder, so
+> the codec choice *is* the speed choice, and `EmulationSpeed = 0` only helps
+> where the encoder is not already the bottleneck (its output is
+> bit-identical). Measurements were taken at **EFB 6 and EFB 2**; read across
+> carefully. Never `dumpCodec: "h264"` in either app — it drops the last ~52
+> frames at SIGTERM.
+>
+> **`apps/media`** runs `DEFAULT_EFB_SCALE = 4` (2×, 1878x1056) with
+> `UseFFV1 = False` and `bitrateKbps: 60000`. **EFB 4 was not measured**, so
+> treat these as directional: at EFB 6, mpeg4 at 60 Mb/s ran 0.93× realtime but
+> showed **visible blocking on fast frames**, and mpeg4 caps out near 141 Mb/s
+> — so if you keep mpeg4, raise it to 150000; 60000 is the one value measured
+> to look bad. `dumpCodec: "utvideo"` is near-lossless (bit-exact after 4:2:0
+> at EFB 6) and ~8× faster than FFV1 there; it needs an **even dump width** and
+> yours is 1878, so it should work, but nobody has measured it at EFB 4. Try
+> it, compare against an FFV1 dump of the same replay, budget scratch disk
+> (~12 GB/game at EFB 6, so several GB at EFB 4), and **report the ratio back**
+> — that number doesn't exist yet.
+>
+> **`apps/clipper`** records at native (EFB 2, 939x528) with FFV1 at 0.77×
+> realtime. utvideo and h264 **fail there** — odd width. So: keep FFV1 for
+> final clips. For draft/preview renders, `dumpCodec: "mpeg4"` plus
+> `emulationSpeed: 0` measured **3.0–3.6×** (about −6 dB, mild softening),
+> which is worth exposing as a "fast draft" option rather than as the default.
+> Three parallel FFV1 workers give 2.2× aggregate, so parallelism stays your
+> main lever at final quality. utvideo at EFB 4 (even width) would also work
+> for clipper if you ever raise its resolution — same unmeasured caveat.
+>
+> ### Verify, and two caveats
+>
+> The bar is **byte-identical output**, not "it ran" — `MIGRATING.md` §5 has
+> the recipe. Do it once per app on a single clip/render. If the dumps differ,
+> diff the two `--user` `Config/Dolphin.ini` and `GFX.ini`: the usual cause is
+> a key your old builder set that the package inherits from the source profile
+> instead. Also confirm nothing survives (`pgrep -a -x "AppRun.wrapped|dolphin-emu"`)
+> and that `~/.config/SlippiPlayback/Config/Dolphin.ini` is untouched by a run.
+>
+> - **Windows is unverified at runtime** in this package. Path resolution is
+>   unit-tested and the `taskkill` branch exists, but nobody has run it.
+>   `apps/clipper` ships an NSIS build, so test there before releasing it.
+> - **Before you start `apps/clipper`:** `~/Projects/lm-clipper` is a separate
+>   checkout of the same codebase, and the repo root has a `sync-packages`
+>   script. Ask Matt whether those two are meant to stay in sync — if they are,
+>   migrating one without the other will produce a conflict, and only one of
+>   them should be done.
 
 ## 3. jungle — `apps/media`
 
