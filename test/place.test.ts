@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { checkPlacement, placeWindows, type X11 } from "../src/place.ts";
+import { checkPlacement, placeWindows, type Monitor, type Rect, type X11 } from "../src/place.ts";
 import { preparePlacement, record } from "../src/run.ts";
 import type { RunnerWarning } from "../src/types.ts";
 
@@ -29,9 +29,17 @@ interface FakeWin {
 
 function fakeX(
   wins: Record<string, FakeWin>,
-  opts: { desktops?: number | null; tree?: number[]; alive?: () => boolean; active?: string | null; here?: number } = {},
+  opts: {
+    desktops?: number | null;
+    tree?: number[];
+    alive?: () => boolean;
+    active?: string | null;
+    here?: number;
+    monitors?: Monitor[];
+  } = {},
 ) {
   const log: string[] = [];
+  const shaped: Record<string, Rect> = {};
   const state = { active: opts.active ?? null, here: opts.here ?? 0 };
   for (const w of Object.values(wins)) if (w.prop === undefined) w.prop = w.desktop;
   const x: X11 = {
@@ -59,8 +67,19 @@ function fakeX(
     },
     pidTree: (root) => opts.tree ?? [root],
     alive: opts.alive ?? (() => true),
+    moveResize: async (id, r) => {
+      log.push(`resize ${id} ${r.width}x${r.height}+${r.x}+${r.y}`);
+      shaped[id] = r;
+    },
+    undecorate: async (id) => {
+      log.push(`undecorate ${id}`);
+    },
+    monitors: async () => {
+      log.push("monitors");
+      return opts.monitors ?? [{ name: "DP-1", x: 0, y: 0, width: 1920, height: 1080 }];
+    },
   };
-  return { x, log, state };
+  return { x, log, state, shaped };
 }
 
 test("windows are found BY PID — another process's Dolphin is never touched", async () => {
@@ -293,4 +312,79 @@ test("record() with unavailable placement still records, and reports the skip", 
 test("without placement, record() reports null — today's behaviour", async () => {
   const p = await preparePlacement({}, ":1");
   assert.deepEqual(p, { start: null, skipped: null });
+});
+
+
+// --- geometry, decorations and monitor selection -----------------------------
+// Measured 2026-10-09: a 1920x1080 WINDOWED Dolphin on a 1920x1080 display is
+// clamped by Dolphin itself to 640x480, but undecorating and then EWMH
+// moveresizing the managed window lands the full 1920x1080 (control run in the
+// same session: 640x480 without these options). That is why they exist.
+
+test("REGRESSION: decorations are stripped BEFORE the resize, or the client area is a titlebar short", async () => {
+  const wins: Record<string, FakeWin> = { "1": { pid: 5, mapped: true, desktop: 0 } };
+  const { x, log, shaped } = fakeX(wins);
+  const r = await placeWindows(
+    5,
+    { workspace: 2, timeoutMs: 200, undecorate: true, geometry: { x: 0, y: 0, width: 1920, height: 1080 } },
+    x,
+  ).done;
+  assert.equal(r.status, "placed");
+  assert.deepEqual(shaped["1"], { x: 0, y: 0, width: 1920, height: 1080 });
+  const un = log.indexOf("undecorate 1");
+  const re = log.findIndex((l) => l.startsWith("resize 1"));
+  assert.ok(un >= 0 && re >= 0 && un < re, `undecorate must precede resize, got ${log.join(" | ")}`);
+});
+
+test("a window is shaped ONCE, however many times the parker retries", async () => {
+  const wins: Record<string, FakeWin> = { "1": { pid: 5, mapped: true, desktop: 0, stuckAt: 0 } };
+  const { x, log } = fakeX(wins);
+  await placeWindows(5, { workspace: 2, timeoutMs: 400, undecorate: true }, x).done;
+  assert.equal(log.filter((l) => l === "undecorate 1").length, 1);
+});
+
+test("monitor 'landscape' skips a rotated portrait primary", async () => {
+  const wins: Record<string, FakeWin> = { "1": { pid: 5, mapped: true, desktop: 0 } };
+  const { x, shaped } = fakeX(wins, {
+    monitors: [
+      { name: "PORTRAIT", x: 0, y: 0, width: 1080, height: 1920 }, // the primary on MST's rig
+      { name: "WIDE", x: 1080, y: 0, width: 1920, height: 1080 },
+    ],
+  });
+  await placeWindows(5, { workspace: 2, timeoutMs: 200, monitor: "landscape" }, x).done;
+  assert.deepEqual(shaped["1"], { name: "WIDE", x: 1080, y: 0, width: 1920, height: 1080 });
+});
+
+test("monitor by output name positions geometry on that output", async () => {
+  const wins: Record<string, FakeWin> = { "1": { pid: 5, mapped: true, desktop: 0 } };
+  const { x, shaped } = fakeX(wins, {
+    monitors: [
+      { name: "DP-1", x: 0, y: 0, width: 1920, height: 1080 },
+      { name: "DP-2", x: 1920, y: 0, width: 2560, height: 1440 },
+    ],
+  });
+  await placeWindows(5, { workspace: 2, timeoutMs: 200, monitor: "DP-2", geometry: { width: 1280, height: 720 } }, x).done;
+  // Size from the caller, origin from the monitor.
+  assert.deepEqual(shaped["1"], { x: 1920, y: 0, width: 1280, height: 720 });
+});
+
+test("an unknown monitor warns and leaves geometry alone — never fatal", async () => {
+  const wins: Record<string, FakeWin> = { "1": { pid: 5, mapped: true, desktop: 0 } };
+  const warnings: RunnerWarning[] = [];
+  const { x, shaped } = fakeX(wins, { monitors: [{ name: "DP-1", x: 0, y: 0, width: 1920, height: 1080 }] });
+  const r = await placeWindows(
+    5,
+    { workspace: 2, timeoutMs: 200, monitor: "HDMI-9", onWarning: (w) => warnings.push(w) },
+    x,
+  ).done;
+  assert.equal(r.status, "placed");
+  assert.equal(shaped["1"], undefined);
+  assert.deepEqual(warnings.map((w) => w.code), ["placement-no-monitor"]);
+});
+
+test("a plain workspace park never shells out to xrandr", async () => {
+  const wins: Record<string, FakeWin> = { "1": { pid: 5, mapped: true, desktop: 0 } };
+  const { x, log } = fakeX(wins);
+  await placeWindows(5, { workspace: 2, timeoutMs: 200 }, x).done;
+  assert.ok(!log.includes("monitors"), "xrandr is a process; do not pay for it unasked");
 });

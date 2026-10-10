@@ -76,6 +76,27 @@ export interface X11 {
   pidTree(root: number): number[];
   /** Is the process still alive? */
   alive(pid: number): boolean;
+  /**
+   * Move AND resize a managed window, via EWMH `_NET_MOVERESIZE_WINDOW`.
+   * A raw ConfigureWindow is ignored by mutter for managed windows; the EWMH
+   * message (what `wmctrl -e` sends) is honoured.
+   */
+  moveResize(id: string, r: Rect): Promise<void>;
+  /** Strip decorations via `_MOTIF_WM_HINTS` (flags=DECORATIONS, decorations=0). */
+  undecorate(id: string): Promise<void>;
+  /** Connected monitors and their rects, for `monitor` selection. */
+  monitors(): Promise<Monitor[]>;
+}
+
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface Monitor extends Rect {
+  name: string;
 }
 
 function run(cmd: string, args: string[], display: string | undefined): Promise<string> {
@@ -115,6 +136,23 @@ export function systemX11(display?: string): X11 {
       (await run("xdotool", ["getactivewindow"], display).catch(() => "")).trim() || null,
     currentDesktop: async () => int(await run("xdotool", ["get_desktop"], display).catch(() => "")),
     activate: (id) => ok(run("xdotool", ["windowactivate", id], display)),
+    moveResize: (id, r) =>
+      // `wmctrl -e <gravity>,<x>,<y>,<w>,<h>`; gravity 0 = whatever the WM uses.
+      ok(run("wmctrl", ["-i", "-r", id, "-e", `0,${r.x},${r.y},${r.width},${r.height}`], display)),
+    undecorate: (id) =>
+      // MWM_HINTS_DECORATIONS (flags=2), decorations=0. A titlebar otherwise
+      // eats ~37px off the top and a capture grabs the SHORTER client surface.
+      ok(run("xprop", ["-id", id, "-f", "_MOTIF_WM_HINTS", "32c", "-set", "_MOTIF_WM_HINTS", "2, 0, 0, 0, 0"], display)),
+    async monitors() {
+      const out = await run("xrandr", ["--listmonitors"], display).catch(() => "");
+      const found: Monitor[] = [];
+      for (const line of out.split("\n")) {
+        // ` 0: +*DP-2 1920/598x1080/336+0+0  DP-2`
+        const m = /^\s*\d+:\s+\+?\*?(\S+)\s+(\d+)\/\d+x(\d+)\/\d+\+(-?\d+)\+(-?\d+)/.exec(line);
+        if (m) found.push({ name: m[1]!, width: +m[2]!, height: +m[3]!, x: +m[4]!, y: +m[5]! });
+      }
+      return found;
+    },
     pidTree,
     alive(pid) {
       try {
@@ -196,9 +234,19 @@ export function placeWindows(
 ): PlacementHandle {
   const timeoutMs = o.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const ws = o.workspace;
+  let wanted: Rect | null = null;
+  let geometryResolved = false;
   const restoreFocus = o.restoreFocus !== false;
   const t0 = Date.now();
-  type W = { id: string; mapped: boolean; desktop: number | null; moves: number; lastMove: number; confirmed: boolean };
+  type W = {
+    id: string;
+    mapped: boolean;
+    desktop: number | null;
+    moves: number;
+    lastMove: number;
+    confirmed: boolean;
+    shaped: boolean;
+  };
   let tree: number[] = [];
   let treeAt = -Infinity;
   let focusRestored = false;
@@ -232,7 +280,7 @@ export function placeWindows(
     for (const id of ids) {
       let w = seen.get(id);
       if (!w) {
-        w = { id, mapped: await x.isManaged(id), desktop: null, moves: 0, lastMove: 0, confirmed: false };
+        w = { id, mapped: await x.isManaged(id), desktop: null, moves: 0, lastMove: 0, confirmed: false, shaped: false };
         seen.set(id, w);
         // Not yet managed: the WM reads this when it maps the window, so it
         // never appears on the user's workspace. Harmless on the unmapped
@@ -249,10 +297,61 @@ export function placeWindows(
         w.lastMove = Date.now();
         await x.moveToDesktop(id, ws);
       }
+      // Shape it once, after the WM owns it. Decorations first: stripping them
+      // changes the frame, so sizing before would leave the client area short
+      // by exactly the titlebar — the bug this exists to avoid.
+      if (!w.shaped && (o.undecorate || o.geometry || o.monitor)) {
+        w.shaped = true;
+        if (o.undecorate) await x.undecorate(id);
+        const rect = await resolveGeometry();
+        if (rect) await x.moveResize(id, rect);
+      }
       w.desktop = await x.getDesktop(id);
       if (w.desktop === ws) w.confirmed = true;
     }
     if (restoreFocus && !focusRestored) await giveFocusBack(ids);
+  }
+
+  /**
+   * The rect to give our windows: an explicit `geometry`, else the chosen
+   * `monitor` filled edge to edge. Resolved once, lazily — `xrandr` is a
+   * process, and a run that asks for neither should never pay for it.
+   */
+  async function resolveGeometry(): Promise<Rect | null> {
+    if (geometryResolved) return wanted;
+    geometryResolved = true;
+    if (o.geometry && o.geometry.x != null && o.geometry.y != null) {
+      wanted = o.geometry as Rect;
+      return wanted;
+    }
+    let origin: Rect | null = null;
+    if (o.monitor) {
+      const all = await x.monitors().catch(() => [] as Monitor[]);
+      origin =
+        o.monitor === "landscape"
+          ? // The widest LANDSCAPE output. A rig with a rotated portrait
+            // primary would otherwise give a feed a portrait surface.
+            all.filter((m) => m.width > m.height).sort((a, b) => b.width * b.height - a.width * a.height)[0] ?? null
+          : all.find((m) => m.name === o.monitor) ?? null;
+      if (!origin) {
+        warn(o, {
+          code: "placement-no-monitor",
+          detail: `no ${o.monitor === "landscape" ? "landscape" : `monitor named ${o.monitor}`} found; leaving geometry alone`,
+        });
+      }
+    }
+    if (o.geometry) {
+      // Size from the caller, position from the monitor when it gave none.
+      wanted = {
+        x: o.geometry.x ?? origin?.x ?? 0,
+        y: o.geometry.y ?? origin?.y ?? 0,
+        width: o.geometry.width,
+        height: o.geometry.height,
+      };
+    } else {
+      wanted = origin;
+    }
+    return wanted;
   }
 
   /**

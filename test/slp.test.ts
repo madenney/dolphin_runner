@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { lastFrameOf } from "../src/slp.ts";
+import { lastFrameOf, lastFrameFromEvents, lastFrameFromFooter } from "../src/slp.ts";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dr-slp-"));
 
@@ -51,4 +51,67 @@ test("returns null when the value is truncated", () => {
   const p = path.join(tmp, "f.slp");
   fs.writeFileSync(p, Buffer.concat([Buffer.from("lastFramel"), Buffer.from([0, 1])]));
   assert.equal(lastFrameOf(p), null);
+});
+
+// --- the raw event-stream fallback -------------------------------------------
+// Anonymised ranked replays carry metadata with NO lastFrame. record() used to
+// hard-fail on those, and a consumer worked around it by rewriting the replay
+// file with a patched footer. Walk the frames instead.
+
+/** A minimal .slp: EVENT_PAYLOADS declaring 0x38/0x3C, then those events. */
+function synthSlp(frames: number[], opts: { footer?: number; declaredLen?: number; truncate?: number } = {}) {
+  const head = Buffer.from("{U\x03raw[$U#l");
+  const events: Buffer[] = [];
+  // EVENT_PAYLOADS: size counts itself; two (command, uint16 size) triples.
+  const payloads = Buffer.from([0x35, 7, 0x38, 0x00, 0x04, 0x3c, 0x00, 0x04]);
+  events.push(payloads);
+  for (const f of frames) {
+    const post = Buffer.alloc(5);
+    post[0] = 0x38;
+    post.writeInt32BE(f, 1);
+    const book = Buffer.alloc(5);
+    book[0] = 0x3c;
+    book.writeInt32BE(f, 1);
+    events.push(post, book);
+  }
+  let raw = Buffer.concat(events);
+  if (opts.truncate != null) raw = raw.subarray(0, raw.length - opts.truncate);
+  const len = Buffer.alloc(4);
+  len.writeInt32BE(opts.declaredLen ?? raw.length);
+  const tail =
+    opts.footer != null
+      ? (() => {
+          const b = Buffer.alloc(14);
+          Buffer.from("lastFrame").copy(b, 0);
+          b.write("l", 9);
+          b.writeInt32BE(opts.footer, 10);
+          return b;
+        })()
+      : Buffer.from("U\x08metadata{}}");
+  return Buffer.concat([head, len, raw, tail]);
+}
+
+test("REGRESSION: a replay with no lastFrame in its metadata still yields a length", () => {
+  const buf = synthSlp([-123, 0, 500, 8454]);
+  assert.equal(lastFrameFromFooter(buf), null, "fixture really has no footer value");
+  assert.equal(lastFrameFromEvents(buf), 8454);
+});
+
+test("the footer wins when it is there — the scan is only a fallback", () => {
+  const buf = synthSlp([0, 100], { footer: 100 });
+  assert.equal(lastFrameFromFooter(buf), 100);
+});
+
+test("a replay still being written (declared length 0) is scanned to EOF", () => {
+  const buf = synthSlp([0, 1, 2, 3], { declaredLen: 0 });
+  assert.equal(lastFrameFromEvents(buf), 3);
+});
+
+test("a truncated final event keeps the frames already seen instead of throwing", () => {
+  const buf = synthSlp([0, 1, 2], { declaredLen: 0, truncate: 3 });
+  assert.equal(lastFrameFromEvents(buf), 2);
+});
+
+test("garbage is null, not a guess", () => {
+  assert.equal(lastFrameFromEvents(Buffer.from("not a replay at all")), null);
 });

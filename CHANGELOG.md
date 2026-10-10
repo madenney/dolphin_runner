@@ -6,6 +6,73 @@ failure mode this package exists to prevent.
 
 Until 1.0 the minor is the breaking digit: `0.x.0` may break, `0.x.y` never does.
 
+## 0.5.0 — 2026-10-09
+
+Closing the gaps between what the package offered and what its five consumers
+actually do. Every item here replaces a workaround somebody was already
+carrying; `MIGRATING.md` §8 names which project and which lines to delete.
+
+**Added**
+
+- **`RecordOptions.commPath`.** The comm file was always `<outDir>/comm.json`,
+  a fixed name — and two consumers run N workers against one shared `outDir`,
+  where that means worker B overwrites A's comm between the write and
+  Dolphin's read and each silently records the other's replay.
+- **A raw event-stream fallback in `lastFrameOf`**, plus `RecordOptions.lastFrame`,
+  plus `endFrame` as a last resort. `record()` used to hard-fail on a replay
+  whose metadata carried no `lastFrame` even when the caller supplied the
+  range; a consumer worked around that by **rewriting the replay file** with a
+  patched footer. Verified against 429 real replays: 428 identical to the
+  footer, one 1 frame higher. `lastFrameFromFooter` / `lastFrameFromEvents`
+  are exported for anyone who wants one specifically.
+- **`RunOptions.hardTimeoutMs`** — an absolute wall-clock cap. The stall
+  windows only catch *silence*, so a Dolphin that keeps printing frames but
+  never reaches the end never tripped them, and two consumers each bolted
+  their own timer on. It SIGTERMs (so the `.avi` finalises) and **resolves**
+  with `stalled: true` and `diagnostic.reason === "hard-timeout"`.
+- **`onFrame` can return `"stop"`** — end the dump here and keep the footage.
+  A consumer wanting N frames around one moment had to abort instead, which
+  SIGKILLs (no `.avi` index) and rejects, then rebuild the path by hand.
+  `RecordResult.stoppedEarly` says it happened.
+- **Placement can shape the window**: `geometry`, `undecorate` and `monitor`
+  (an output name, or `"landscape"`). This is the only way to get a surface
+  bigger than Dolphin will open — it clamps an oversize window to 640x480
+  itself. Measured 2026-10-09: **1920x1080 on a 1920x1080 display, against a
+  640x480 control**. Decorations are stripped before the resize; the other
+  order leaves the client area a titlebar short, which is what a capture grabs.
+  This was the last thing blocking MST from deleting its title-matching parker.
+- **Profile options** `texturePacks` / `texturePackMode` / `hiresTextures` /
+  `cacheHiresTextures` (two consumers hand-copied packs into
+  `Load/Textures/<gameId>/` and rewrote the ini we had just written),
+  `sram` / `copyFromProfile` (two consumers shelled out to `cp GC/SRAM.raw`),
+  and `dumpFormat` / `dumpFramesAsImages`.
+- **`dolphin-runner record`** — the CLI's second subcommand, profile build
+  included, so a Python or shell consumer needs no Node shim. Events:
+  `started`, `progress`, `warning`, `placed`, `result`, `error`.
+- `StallDiagnostic.reason` distinguishes `"boot-stall"`, `"frame-stall"` and
+  `"hard-timeout"`.
+
+**Fixed**
+
+- `EFBScale` is now written in **every** section. Ishiiruka keeps a second one
+  under `[Hacks]`, and two consumers independently patched all occurrences
+  after calling `buildProfile` because leaving them disagreeing dumps at the
+  wrong internal resolution.
+- Record mode pins `DumpFormat=avi` and `DumpFramesAsImages=False`. `record()`
+  asserts a `<base>.avi`, so a source profile left on another container failed
+  only *after* a full-length run, as "produced no video".
+- The event-stream scan stops at the UBJSON metadata key instead of running to
+  EOF. Walking into the footer read its bytes as a frame event — a fixture
+  produced "frame 5572717", which as an `endFrame` is a Dolphin that never
+  reaches it and hangs. Caught by its own test before it ever shipped.
+
+**Corrected**
+
+- Gotcha 20 was too pessimistic. The 640x480 clamp is real and is Dolphin's
+  own, but it only governs what Dolphin *opens*; undecorating and
+  moveresizing the managed window afterwards gets the full surface.
+  `{ fullscreen: true }` is no longer the only 1:1 option on a 1080p display.
+
 ## 0.4.0 — 2026-10-09
 
 Running Dolphin in the background: window parking, mute, codec and focus

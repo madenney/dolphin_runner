@@ -116,8 +116,35 @@ export async function buildProfile(userDir: string, opts: ProfileOptions & { dol
       if (opts.bitrateKbps != null) gfx = setInSection(gfx, "Settings", "BitrateKbps", String(opts.bitrateKbps));
       if (opts.aspectRatio != null) gfx = setInSection(gfx, "Settings", "AspectRatio", String(opts.aspectRatio));
     }
-    if (opts.efbScale != null) gfx = setInSection(gfx, "Settings", "EFBScale", String(opts.efbScale));
+    if (opts.efbScale != null) {
+      gfx = setInSection(gfx, "Settings", "EFBScale", String(opts.efbScale));
+      // Ishiiruka keeps a SECOND EFBScale under [Hacks], and leaving the two
+      // disagreeing gives a dump at the wrong internal resolution. Two
+      // consumers independently discovered this and patched every occurrence
+      // after calling us; do it here instead. setEverywhere only rewrites keys
+      // that exist, so this is a no-op on a profile that has just the one.
+      gfx = setEverywhere(gfx, "EFBScale", String(opts.efbScale));
+    }
     if (recording && opts.dumpCodec != null) gfx = setDumpCodec(gfx, opts.dumpCodec);
+    if (recording) {
+      // PIN THE CONTAINER. record() asserts a `<base>.avi` exists afterwards,
+      // so a source profile left on another DumpFormat — or on frame-by-frame
+      // PNGs — fails only AFTER a full-length run, with "produced no video".
+      // Both are overridable for a consumer that genuinely wants something else.
+      gfx = setInSection(gfx, "Settings", "DumpFormat", opts.dumpFormat ?? "avi");
+      gfx = setInSection(
+        gfx,
+        "Settings",
+        "DumpFramesAsImages",
+        opts.dumpFramesAsImages ? "True" : "False",
+      );
+    }
+    if (opts.hiresTextures != null || opts.texturePacks?.length) {
+      gfx = setInSection(gfx, "Settings", "HiresTextures", opts.hiresTextures === false ? "False" : "True");
+    }
+    if (opts.cacheHiresTextures != null) {
+      gfx = setInSection(gfx, "Settings", "CacheHiresTextures", opts.cacheHiresTextures ? "True" : "False");
+    }
     if (opts.msaa != null) {
       gfx = setInSection(gfx, "Settings", "MSAA", String(msaaSamples(opts.msaa)));
       gfx = setInSection(gfx, "Settings", "SSAA", "False");
@@ -193,7 +220,25 @@ export async function buildProfile(userDir: string, opts: ProfileOptions & { dol
     await fsp.writeFile(path.join(destConfig, "Hotkeys.ini"), "[Hotkeys1]\nDevice = /0/\n");
   }
 
-  // 6. Persistent shader cache, best-effort. A stale real dir or a wrong
+  // 6. HD texture packs. Dolphin looks in `<userDir>/Load/Textures/<gameId>/`,
+  //    a layout each consumer had to learn and reproduce by hand after we had
+  //    already built the profile.
+  if (opts.texturePacks?.length) {
+    await linkTexturePacks(userDir, settingsId, opts.texturePacks, opts.texturePackMode ?? "symlink");
+  }
+
+  // 7. Non-ini profile assets. `GC/SRAM.raw` is the memory card carrying the
+  //    console's language and sound settings: without it a throwaway profile
+  //    boots with different settings than the operator's real one, so two
+  //    consumers independently shelled out to `cp` after calling us.
+  for (const rel of assetsToCopy(opts)) {
+    const from = path.join(src.root, rel);
+    const to = path.join(userDir, rel);
+    await fsp.mkdir(path.dirname(to), { recursive: true });
+    await fsp.copyFile(from, to).catch(() => {}); // absent is normal, never fatal
+  }
+
+  // 8. Persistent shader cache, best-effort. A stale real dir or a wrong
   //    symlink from a previous run is replaced; anything else is left alone.
   if (opts.shaderCacheDir && os.type() !== "Windows_NT") {
     await linkShaderCache(userDir, opts.shaderCacheDir);
@@ -221,6 +266,43 @@ function setDumpCodec(gfx: string, codec: string): string {
 /** Dolphin's valid MSAA sample counts; anything else is off (1). */
 export function msaaSamples(n: number): number {
   return n === 2 || n === 4 || n === 8 ? n : 1;
+}
+
+/** `GC/SRAM.raw` unless told otherwise, plus whatever else the caller names. */
+function assetsToCopy(opts: ProfileOptions): string[] {
+  if (opts.copyFromProfile) return opts.copyFromProfile;
+  return opts.mode === "record" || opts.sram ? ["GC/SRAM.raw"] : [];
+}
+
+/**
+ * Put each pack under `<userDir>/Load/Textures/<gameId>/<packName>`.
+ *
+ * Symlinks by default: a pack is hundreds of MB and a per-clip copy is the
+ * difference between a batch that runs and one that fills the disk. Copy mode
+ * exists for Windows, where a symlink needs a privilege a user may not have.
+ */
+async function linkTexturePacks(
+  userDir: string,
+  gameId: string,
+  packs: string[],
+  mode: "symlink" | "copy",
+): Promise<void> {
+  const root = path.join(userDir, "Load", "Textures", gameId);
+  await fsp.mkdir(root, { recursive: true });
+  for (const pack of packs) {
+    const dest = path.join(root, path.basename(pack));
+    await fsp.rm(dest, { recursive: true, force: true }).catch(() => {});
+    if (mode === "copy") {
+      await fsp.cp(pack, dest, { recursive: true });
+      continue;
+    }
+    try {
+      await fsp.symlink(path.resolve(pack), dest, "junction");
+    } catch {
+      // No symlink privilege (Windows) — a copy is slower but correct.
+      await fsp.cp(pack, dest, { recursive: true });
+    }
+  }
 }
 
 async function linkShaderCache(userDir: string, target: string): Promise<void> {

@@ -62,9 +62,10 @@ async function runDolphin(
   slpPath: string,
   plan: SpawnPlan,
   o: RunOptions,
-): Promise<{ stalled: boolean; diagnostic: StallDiagnostic | null }> {
+): Promise<{ stalled: boolean; diagnostic: StallDiagnostic | null; stoppedEarly: boolean }> {
   const bootStallMs = o.bootStallMs ?? DEFAULT_BOOT_STALL_MS;
   const frameStallMs = o.frameStallMs ?? DEFAULT_FRAME_STALL_MS;
+  const startedAt = Date.now();
 
   return await new Promise((resolvePromise, reject) => {
     const env = recordEnv(process.env, o);
@@ -84,6 +85,7 @@ async function runDolphin(
     let killedAtEnd = false;
     let settled = false;
     let stalled = false;
+    let stoppedEarly = false;
     let diagnostic: StallDiagnostic | null = null;
     let stderrBytes = 0;
     let lastProgress = Date.now();
@@ -104,8 +106,9 @@ async function runDolphin(
       for (const line of String(d).split(/\r?\n/)) stderrTail.push(line);
     });
 
-    const snapshot = (): StallDiagnostic => ({
+    const snapshot = (reason: StallDiagnostic["reason"]): StallDiagnostic => ({
       replay: slpPath,
+      reason,
       silentForSec: Math.round((Date.now() - lastProgress) / 1000),
       hungOnBoot: !sawAnyFrame,
       endFrame: end === Infinity ? null : end,
@@ -121,10 +124,23 @@ async function runDolphin(
     // a five-minute game that streams frames never trips it.
     const watchdog = setInterval(() => {
       if (settled) return;
+      // The HARD cap, if asked for. The stall windows only catch SILENCE; a
+      // Dolphin that keeps printing frames but never reaches the end is not
+      // silent and never trips them, so both jungle_media and replay_archiver
+      // had to bolt their own wall-clock timer on top. Unlike an abort, this
+      // RESOLVES: the dump so far is real footage and the caller's duration
+      // guard is what should judge it.
+      if (o.hardTimeoutMs != null && Date.now() - startedAt >= o.hardTimeoutMs) {
+        stalled = true;
+        diagnostic = snapshot("hard-timeout");
+        // SIGTERM, not SIGKILL: we want the .avi index written.
+        killTree(child.pid!, true);
+        return;
+      }
       const window = sawAnyFrame ? frameStallMs : bootStallMs;
       if (Date.now() - lastProgress < window) return;
       stalled = true;
-      diagnostic = snapshot();
+      diagnostic = snapshot(sawAnyFrame ? "frame-stall" : "boot-stall");
       killTree(child.pid!, false); // a hang does not get a graceful exit
     }, 2000);
     watchdog.unref?.();
@@ -156,7 +172,25 @@ async function runDolphin(
       sawAnyFrame = true;
       lastProgress = Date.now();
       const current = parsed.frame;
-      if (end !== Infinity) o.onFrame?.(current, end);
+      // A caller that returns "stop" wants the footage it already has — a
+      // stage shot is N frames around one frame, not a whole game. Aborting
+      // instead would SIGKILL (no .avi index) and reject (no result), which is
+      // why a consumer doing this had to catch its own abort and rebuild the
+      // path by hand. Stop gracefully and resolve normally.
+      let want: unknown;
+      if (end !== Infinity) {
+        try {
+          want = o.onFrame?.(current, end);
+        } catch {
+          /* a throwing callback is the caller's bug, never a failed run */
+        }
+      }
+      if (!killedAtEnd && want === "stop") {
+        killedAtEnd = true;
+        stoppedEarly = true;
+        killTree(child.pid!, true);
+        return;
+      }
       // COMPARE NUMERICALLY, >= not == and never as a substring. A substring
       // test for `845` matches inside `8454` (early kill → truncated dump), and
       // an exact `==` on a frame Dolphin never happens to print means we never
@@ -187,7 +221,7 @@ async function runDolphin(
       // every sense except announcing it, and rejecting here throws away work
       // that already cost its full real-time record. Resolve, report `stalled`,
       // and let the caller's duration guard judge the footage.
-      resolvePromise({ stalled, diagnostic });
+      resolvePromise({ stalled, diagnostic, stoppedEarly });
     });
   });
 }
@@ -210,14 +244,27 @@ export async function record(
   if (why) throw new Error(`cannot record: ${why}`);
   if (!existsSync(o.userDir)) throw new Error(`user dir does not exist: ${o.userDir}`);
 
-  const lastFrame = lastFrameOf(slpPath);
+  // The replay's length, in order of preference: what the caller already knows,
+  // what the file says, then the explicit endFrame. The last fallback matters —
+  // a replay whose metadata carries no lastFrame used to be a hard failure even
+  // when the caller had supplied the range, and a consumer worked around that
+  // by REWRITING the replay file. Never refuse work we have the numbers for.
+  const scanned = o.lastFrame ?? lastFrameOf(slpPath);
+  const lastFrame = scanned != null && scanned > 0 ? scanned : (o.endFrame ?? null);
   if (lastFrame == null || lastFrame <= 0) {
-    throw new Error(`could not read lastFrame from ${slpPath}`);
+    throw new Error(
+      `could not read lastFrame from ${slpPath} — pass lastFrame or endFrame if you already know it`,
+    );
   }
 
   mkdirSync(o.outDir, { recursive: true });
   const base = o.baseName ?? "dump";
-  const commPath = path.join(o.outDir, "comm.json");
+  // Default is inside outDir, but it MUST be overridable: consumers run N
+  // workers against one shared outDir with per-clip basenames, and a fixed
+  // `comm.json` there means worker B overwrites A's between write and
+  // Dolphin's read — silently recording the wrong replay.
+  const commPath = o.commPath ?? path.join(o.outDir, "comm.json");
+  mkdirSync(path.dirname(commPath), { recursive: true });
   writeComm(commPath, {
     replay: slpPath,
     startFrame: o.startFrame ?? -123,
@@ -248,8 +295,9 @@ export async function record(
   };
   let stalled: boolean;
   let diagnostic: StallDiagnostic | null;
+  let stoppedEarly: boolean;
   try {
-    ({ stalled, diagnostic } = await runDolphin(paths, slpPath, { args, commPath }, runOpts));
+    ({ stalled, diagnostic, stoppedEarly } = await runDolphin(paths, slpPath, { args, commPath }, runOpts));
   } finally {
     (placing as PlacementHandle | null)?.stop();
   }
@@ -264,6 +312,7 @@ export async function record(
     wav: existsSync(wav) ? wav : null,
     lastFrame,
     stalled,
+    stoppedEarly,
     diagnostic,
     placement,
   };

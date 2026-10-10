@@ -1,3 +1,5 @@
+import type { Rect } from "./place.ts";
+
 /** Where the two binaries this package drives actually live. */
 export interface DolphinPaths {
   /** The Slippi PLAYBACK build — NOT the netplay build. Different binary. */
@@ -56,6 +58,43 @@ export interface ProfileOptions {
    * Never "h264": it drops the last ~50 frames (lookahead unflushed at SIGTERM).
    */
   dumpCodec?: DumpCodec;
+  /**
+   * `[Settings] DumpFormat`, the dump CONTAINER. Record mode pins `"avi"`
+   * unless you say otherwise, because `record()` asserts a `<base>.avi` and a
+   * source profile left on something else fails only after a full-length run.
+   */
+  dumpFormat?: string;
+  /** `[Settings] DumpFramesAsImages`. Record mode pins it off for the same reason. */
+  dumpFramesAsImages?: boolean;
+  /**
+   * HD texture packs to make available: each is linked into
+   * `<userDir>/Load/Textures/<gameSettingsId>/<basename>` and turns
+   * `HiresTextures` on. Symlinked by default — a pack is hundreds of MB and a
+   * per-clip copy fills the disk.
+   */
+  texturePacks?: string[];
+  /** `"symlink"` (default) or `"copy"`, for a host with no symlink privilege. */
+  texturePackMode?: "symlink" | "copy";
+  /** `[Settings] HiresTextures`. Implied by `texturePacks`; set false to force off. */
+  hiresTextures?: boolean;
+  /**
+   * `[Settings] CacheHiresTextures`. Off is usually right for batch recording:
+   * prefetching a multi-hundred-MB pack per clip costs more than lazy loading.
+   */
+  cacheHiresTextures?: boolean;
+  /**
+   * Copy `GC/SRAM.raw` from the source profile — the memory card holding the
+   * console's language and sound settings. Record mode does it by default;
+   * without it a throwaway profile boots with different settings than the
+   * operator's real one.
+   */
+  sram?: boolean;
+  /**
+   * Profile-root-relative paths to copy verbatim instead of the default
+   * (`GC/SRAM.raw`). For assets `buildProfile` knows nothing about. Missing
+   * files are skipped, never fatal.
+   */
+  copyFromProfile?: string[];
   /**
    * RAW `GALE01.ini` text, written verbatim into the throwaway profile.
    *
@@ -193,7 +232,8 @@ export interface RunnerWarning {
     | "placement-unsupported" // not Linux, no DISPLAY, tools missing, bad workspace number
     | "placement-no-wm" // no EWMH window manager (Xvfb): nothing to park
     | "placement-no-workspace" // that workspace doesn't exist on this display
-    | "placement-ignored"; // the WM left some window elsewhere after retries
+    | "placement-ignored" // the WM left some window elsewhere after retries
+    | "placement-no-monitor"; // `monitor` named an output that isn't connected
   detail: string;
 }
 
@@ -201,6 +241,29 @@ export interface RunnerWarning {
 export interface PlacementOptions {
   /** EWMH workspace, 0-BASED (GNOME's "Workspace 10" is 9). Never created — must exist. */
   workspace: number;
+  /**
+   * Resize the window after the WM takes it, via EWMH `_NET_MOVERESIZE_WINDOW`.
+   *
+   * This is the way to get a surface BIGGER than Dolphin will open on its own:
+   * `ProfileOptions.window` only writes the ini, and Dolphin clamps anything
+   * that doesn't fit the work area back to 640x480 (its own clamp, not the
+   * WM's). Moving it afterwards goes around that. `x`/`y` default to the
+   * chosen `monitor`'s origin, or 0,0.
+   */
+  geometry?: { x?: number; y?: number; width: number; height: number };
+  /**
+   * Strip window decorations (`_MOTIF_WM_HINTS`). A titlebar eats ~37px off
+   * the top and a capture then grabs the SHORTER client surface — a 1920x1080
+   * window captured as 1920x1043, which no longer fills a 1080p canvas.
+   */
+  undecorate?: boolean;
+  /**
+   * Which monitor to place on: an output name (`"DP-2"`), or `"landscape"` for
+   * the largest non-rotated one. Without `geometry` the window fills it.
+   * `"landscape"` exists for a rig whose primary is a rotated portrait panel,
+   * where a fullscreen feed comes out squished.
+   */
+  monitor?: string;
   /** X display; defaults to the run's `display`, then DISPLAY. */
   display?: string;
   /** How long to keep watching for windows. Default 20 s. */
@@ -231,6 +294,8 @@ export interface PlacedWindow {
 
 export interface PlacementReport {
   workspace: number;
+  /** The rect placement asked the WM for, if any. */
+  geometry?: Rect | null;
   /**
    * "placed": every mapped window is on `workspace`. "partial": some aren't
    * (also warned). "none-found": no window mapped before the timeout or exit.
@@ -242,6 +307,12 @@ export interface PlacementReport {
 
 export interface StallDiagnostic {
   replay: string;
+  /**
+   * Which rule fired. `"boot-stall"` and `"frame-stall"` are silences (the
+   * process was SIGKILLed); `"hard-timeout"` is a Dolphin that kept printing
+   * frames past its wall-clock cap and was SIGTERMed so the dump finalises.
+   */
+  reason: "boot-stall" | "frame-stall" | "hard-timeout";
   /** Seconds without a `[CURRENT_FRAME]` when the watchdog fired. */
   silentForSec: number;
   /** True if it never emitted a single frame — a hung boot, not a freeze. */
@@ -271,7 +342,16 @@ export interface RunOptions {
    * never manages X — pass what you want, or inherit the environment.
    */
   display?: string;
-  onFrame?: (current: number, end: number) => void;
+  /**
+   * Called for every frame Dolphin reports, once the end frame is known.
+   *
+   * Return `"stop"` to end the dump HERE and keep the footage: Dolphin is
+   * SIGTERMed (so the `.avi` index is written) and `record()` resolves with
+   * `stoppedEarly: true`. That is for a caller who wants N frames around some
+   * moment rather than a whole game. Do not use an AbortSignal for that — an
+   * abort SIGKILLs and rejects, which loses both the index and the result.
+   */
+  onFrame?: (current: number, end: number) => void | "stop";
   /**
    * Called once with the spawned Dolphin's pid. The AppImage execs, so this is
    * the root of the tree that owns the window (its descendants: `pidTree`).
@@ -282,6 +362,17 @@ export interface RunOptions {
   bootStallMs?: number;
   /** Frames stopped for this long mid-record = frozen. */
   frameStallMs?: number;
+  /**
+   * Absolute wall-clock cap on the whole run. Off by default.
+   *
+   * The stall windows only catch SILENCE — a Dolphin that keeps printing
+   * frames but never reaches the end never trips them, which is why two
+   * consumers each bolted their own timer on. When this fires the run is
+   * SIGTERMed (so the `.avi` finalises) and `record()` RESOLVES with
+   * `stalled: true` and `diagnostic.reason === "hard-timeout"`. It is not an
+   * abort: the footage so far is real, and your duration guard should judge it.
+   */
+  hardTimeoutMs?: number;
   /**
    * Extra environment for the Dolphin process, on top of ours. `display`,
    * `audioSink` and `appName` are applied after it and win.
@@ -312,6 +403,21 @@ export interface RunOptions {
 }
 
 export interface RecordOptions extends RunOptions {
+  /**
+   * Where the comm file is written. Default `<outDir>/comm.json`.
+   *
+   * Override it whenever several recordings share an `outDir`: the default
+   * name is fixed, so two workers would overwrite each other's comm between
+   * the write and Dolphin's read, and each would record the other's replay
+   * with no error anywhere.
+   */
+  commPath?: string;
+  /**
+   * The replay's last frame, when you already know it (from a database, say).
+   * Skips reading the file. Without it the footer is read, then the raw event
+   * stream, then `endFrame` is used — see `record()`.
+   */
+  lastFrame?: number;
   /** Where Dolphin writes `<baseName>.avi` / `.wav`. */
   outDir: string;
   baseName?: string;
@@ -434,6 +540,8 @@ export interface RecordResult {
   lastFrame: number;
   /** True if the watchdog fired. NOT a verdict — judge the footage. */
   stalled: boolean;
+  /** True if your own `onFrame` returned `"stop"`. A clean, deliberate end. */
+  stoppedEarly: boolean;
   diagnostic: StallDiagnostic | null;
   /** How window placement went; null if none was asked for. */
   placement: PlacementReport | null;

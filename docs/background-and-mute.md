@@ -166,6 +166,16 @@ Xvfb with no WM, plus i3 as a stand-in WM. Openbox is not installed here. [measu
   - Main window title: `Faster Melee - Slippi (3.5.2) - Playback`.
   - Every instance is identical, so per-instance placement must come from each instance's own
     `RenderWindowXPos/YPos`, not WM rules.
+- **The clamp can be undone AFTER the map, on mutter.** [measured 2026-10-09]
+  Stripping `_MOTIF_WM_HINTS` decorations and then sending EWMH
+  `_NET_MOVERESIZE_WINDOW` (`wmctrl -i -r <id> -e 0,x,y,w,h`) to the managed window gave a
+  **1920x1080** render surface on the 1920x1080 GNOME display, against a **640x480** control
+  run in the same session with everything else identical. Both runs asked for 1920x1080 in
+  the ini; only the one that reshaped the window got it.
+  - Order matters: undecorate **first**. Resizing before stripping leaves the client area a
+    titlebar short (1920x1043 was measured earlier), and the capture takes the client area.
+  - This is now `placement: { undecorate, geometry, monitor }` in the runner, so
+    `{ fullscreen: true }` is no longer the only 1:1 option on a 1080p display.
 - **Openbox rules are untested.** From the source: with `<decor>no</decor>` openbox should
   report a zero border, so 1920x1080 wouldn't trip the clamp. [code]
 - **`RenderToMain=True` works on Linux.** It gives one window instead of two and an identical
@@ -358,7 +368,9 @@ Items 1–8, 10, 11 and 12 are fixed on the branch. Item 9 is now documented.
 
 1. `gfxBackend: "Null"` does not exist in Ishiiruka and silently did nothing.
 2. Gotcha 19 ("blank = Vulkan") was wrong: blank is OGL.
-3. Gotcha 20 blamed mutter for the 640x480 fallback; it is Dolphin's own clamp.
+3. Gotcha 20 blamed mutter for the 640x480 fallback; it is Dolphin's own clamp — and
+   (2026-10-09) it is only about what Dolphin *opens*: reshaping the window afterwards
+   gets the full surface, so the gotcha's "fullscreen is the only option" was wrong too.
 4. `efbScale` JSDoc said "multiplier". It is an enum, and 2 = native.
 5. `obsMirror` defaulted to `emulationSpeed: 0`, which would fast-forward on air.
 6. Record mode didn't force `PauseOnFocusLost=False`, a proven hang.

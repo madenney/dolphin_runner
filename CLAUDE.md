@@ -105,15 +105,18 @@ every helper is API. Two layers:
   handle; `stop()` SIGKILLs the tree. The caller re-points it by rewriting the
   comm file (`writeMirrorComm`); nothing here watches anything.
 - `place.ts` — `placeWindows(pid, …)`: park ONE process tree's windows on an
-  EWMH workspace (xdotool/xprop, optional system tools), plus `checkPlacement`
+  EWMH workspace, and optionally undecorate / moveresize / pick a monitor
+  (xdotool/xprop/wmctrl/xrandr, optional system tools), plus `checkPlacement`
   preflight. Its logic is unit-tested against a fake X server (`X11` is
   injected); the real behaviour was measured on GNOME — see gotcha 21.
-  `record()`/`obsMirror()` take `placement: { workspace }`; never fatal unless
-  `required`.
-- `cli.ts` — `dolphin-runner obs-mirror …`, the process boundary for non-Node
-  consumers (MST is Rust). One JSON line per event on stdout (`started`,
-  `warning`, `placed`, `stopping`, `exited`, `error`); foreground until
-  Dolphin exits; SIGINT/SIGTERM/SIGHUP forwarded to the whole tree.
+  `record()`/`obsMirror()` take `placement: { workspace, geometry?, undecorate?,
+  monitor? }`; never fatal unless `required`.
+- `cli.ts` — `dolphin-runner record …` and `obs-mirror …`, the process boundary
+  for non-Node consumers (MST is Rust, melee_skins and replay_archiver drive it
+  from Python). One JSON line per event on stdout (`started`, `progress`,
+  `warning`, `placed`, `result`, `stopping`, `exited`, `error`); foreground
+  until Dolphin exits; SIGINT/SIGTERM/SIGHUP forwarded to the whole tree.
+  `record` builds the profile too, so a shell consumer needs no Node shim.
 
 Only `types.ts` and the doc comments describe the contract; the JSDoc on
 `RunOptions`/`RecordResult` is load-bearing and is what consumers will read.
@@ -204,9 +207,17 @@ Each of these cost somebody an event. The comments in the code say so; keep them
 15. **Per-instance `userDir` is mandatory.** The dump path is a property of the
     user dir, not the invocation — two Dolphins on one profile overwrite each
     other's frames SILENTLY, and you get footage from the wrong replay.
-16. **`InternalResolutionFrameDumps` must be CREATED if absent.** A profile that
-    has never dumped has no such key; only rewriting existing lines gives you a
-    window-resolution dump and nothing downstream can tell.
+16. **Pin what the consumer's dump depends on, and nothing else.**
+    `InternalResolutionFrameDumps` must be CREATED if absent, and record mode
+    also pins `DumpFormat=avi` and `DumpFramesAsImages=False` — `record()`
+    asserts a `<base>.avi`, so a source profile left on another container fails
+    only AFTER a full-length run, as "produced no video". `EFBScale` must be
+    written in EVERY section: Ishiiruka keeps a second one under `[Hacks]`, and
+    two consumers independently patched all occurrences after calling us. The
+    CODEC stays inherited (gotcha 5) — that one is the consumer's choice.
+    A profile that has never dumped has none of these keys, so only CREATING
+    them works; rewriting existing lines silently gives a window-resolution
+    dump and nothing downstream can tell.
 17. **Consumers must pass `efbScale`.** Omitting it inherits the real profile's
     value, which is whatever the user last played at. The first smoke run
     inherited `EFBScale = 7` and produced a 25 GB lossless AVI at ~4 fps for a
@@ -224,14 +235,18 @@ Each of these cost somebody an event. The comments in the code say so; keep them
     wrong), but a profile someone set to Vulkan stays Vulkan. Slippi's stock ini also carries `GFXBackend` and
     `EmulationSpeed` under `[Movie]` — those are movie metadata, ignore them;
     `[Core]` is the live one.
-20. **A windowed render larger than the display's work area becomes 640x480.**
-    That is Dolphin's OWN clamp (`DolphinWX/FrameTools.cpp:679-689`, size +
-    WM decoration vs the work area of the output-tied RandR monitor), not
-    mutter's — reproduced with no WM at all. 1920x1080 windowed on a 1920x1080
-    GNOME display captured at 640x443; 1280x720 landed (captured 1280x683 —
-    decorations). On a decorated 1080p desktop `{ fullscreen: true }` is the
-    only 1:1 option. On a larger screen, undecorated 1080p tiles work — see
-    docs/background-and-mute.md.
+20. **A windowed render larger than the display's work area becomes 640x480 —
+    but placement can undo it.** The clamp is Dolphin's OWN
+    (`DolphinWX/FrameTools.cpp:679-689`, size + WM decoration vs the work area
+    of the output-tied RandR monitor), not mutter's — reproduced with no WM at
+    all. The ini route therefore cannot give you a 1:1 1080p surface on a 1080p
+    display. Going around it AFTER the WM takes the window does:
+    `placement: { undecorate: true, geometry: { width: 1920, height: 1080 } }`
+    measured **1920x1080** on a 1920x1080 GNOME display, against a **640x480**
+    control in the same session (2026-10-09). Decorations must be stripped
+    BEFORE the resize or the client area is a titlebar short (1920x1043), which
+    is what a capture grabs. `monitor: "landscape"` picks the output, for a rig
+    whose primary is a rotated portrait panel.
 21. **Park by PID, and never trust a property you wrote.** Every Playback
     window is WM_CLASS `AppRun.wrapped` with the same title, so only the pid
     tells instances apart — title matching grabbed other projects' Dolphins.
@@ -268,8 +283,10 @@ Each of these cost somebody an event. The comments in the code say so; keep them
 - **`record()` is verified on Linux only by `npm run smoke`, by hand.** First
   passing run 2026-09-18: 4383-frame replay, AVI 75.07 s vs 75.10 s expected,
   no stall, no leaked processes, real profile byte-identical. Re-run 2026-10-09
-  after the background/placement changes to `run.ts`/`kill.ts`/`profile.ts`:
-  same numbers (98.6 s wall, ratio 1.000). The smoke path does NOT exercise
+  twice — after the background/placement changes and again after the 0.5.0
+  consumer-gap work — same numbers both times (98.6 s wall, ratio 1.000). The
+  `dolphin-runner record` CLI path was proven by hand the same day (75.07 s,
+  custom `--comm` honoured). The smoke path does NOT exercise
   placement, `silent`, `audioSink`, `appName` or a non-default `dumpCodec` —
   those were verified by hand (docs/background-and-mute.md).
 

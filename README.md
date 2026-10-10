@@ -165,6 +165,12 @@ that resolution — an Electron host whose `app.getPath('appData')` disagrees).
 | `efbScale` | source | `[Settings] EFBScale`, an **enum not a multiplier**: 0 auto, 1 auto-integral, 2 = 1x native, 3 = 1.5x, 4 = 2x, 5 = 2.5x, 6 = 3x, 7 = 4x, 8 = 5x. **Always pass it** (gotcha 17) |
 | `aspectRatio` | source | 6 = Force16:9, 5 = Force4:3 |
 | `dumpCodec` | source | `"ffv1"` \| `"utvideo"` \| `"mpeg4"`. The real speed lever — see below |
+| `dumpFormat` | `"avi"` in record mode | the container. Pinned because `record()` asserts a `<base>.avi`, and a profile left on another format fails only after a full-length run |
+| `dumpFramesAsImages` | `false` in record mode | same reason |
+| `texturePacks` | — | HD packs, symlinked into `<userDir>/Load/Textures/<gameSettingsId>/`; turns `HiresTextures` on |
+| `texturePackMode` | `"symlink"` | `"copy"` for a host with no symlink privilege |
+| `hiresTextures`, `cacheHiresTextures` | source | `cacheHiresTextures: false` suits batch recording — prefetching a huge pack per clip costs more than lazy loading |
+| `sram` / `copyFromProfile` | `GC/SRAM.raw` in record mode | non-ini profile assets. SRAM is the memory card holding language and sound settings |
 | `bitrateKbps` | source | mpeg4 only; stops helping past ~141 Mb/s at EFB 6 |
 | `geckoIni` | copied | raw `GALE01.ini` text, written verbatim |
 | `gameSettingsId` | `GALE01` | which `GameSettings/<id>.ini` to write |
@@ -204,11 +210,14 @@ is refused at `efbScale: 2`, which is 939 wide) and writes ~12 GB per 75 s game;
 | `appName` | — | `application.name` for the audio stream. WirePlumber remembers volume/mute **by that name**, and every Dolphin is otherwise `dolphin-emu` — hand-mute one and every future Dolphin starts muted |
 | `placement` | — | `{ workspace, required?, restoreFocus?, timeoutMs? }` — see below |
 | `signal` | — | `AbortSignal`; aborting SIGKILLs the tree |
-| `onFrame` | — | `(current, end) => void`, record only |
+| `onFrame` | — | `(current, end)`, record only. **Return `"stop"`** to end here and keep the footage: SIGTERM, resolves with `stoppedEarly: true`. Do not use an abort for that — an abort SIGKILLs (no `.avi` index) and rejects |
 | `onSpawn` | — | `(pid) => void`, once, as soon as there is a pid |
 | `onWarning` | — | `(w: RunnerWarning) => void` — things skipped but not fatal |
 | `bootStallMs` | `90000` | no first frame within this = hung boot. Must cover Dolphin start + ISO load |
 | `frameStallMs` | `30000` | frames stopped this long mid-record = frozen |
+| `hardTimeoutMs` | off | absolute wall-clock cap. The stall windows only catch **silence**; a Dolphin printing frames forever never trips them. SIGTERMs and **resolves** with `stalled: true`, `reason: "hard-timeout"` |
+| `commPath` | `<outDir>/comm.json` | record only. **Override it when several recordings share an `outDir`** — the default name is fixed, so workers overwrite each other's comm and each records the other's replay |
+| `lastFrame` | read from the file | record only; when you already know the length |
 | `startFrame` | `-123` | record only; the pre-GO! lead-in |
 | `endFrame` | the `.slp`'s | record only. **Must be finite** or Dolphin idles forever |
 | `baseName` | `"dump"` | record only; `<baseName>.avi` / `.wav` |
@@ -219,6 +228,24 @@ is refused at `efbScale: 2`, which is 939 wide) and writes ~12 GB per 75 s game;
 workspace (0-based: GNOME's "Workspace 10" is `9`), finding them **by pid**.
 Never by title — every Playback window is WM_CLASS `AppRun.wrapped` with the
 same title, which is how the copy-pasted parkers grabbed each other's Dolphins.
+
+It can also shape the window, which is the **only** way to get a surface bigger
+than Dolphin will open on its own (it clamps an oversize window to 640x480
+itself — see `ProfileOptions.window`):
+
+```ts
+placement: {
+  workspace: 9,
+  undecorate: true,                              // a titlebar costs you 37px of capture
+  geometry: { width: 1920, height: 1080 },       // x/y default to the monitor's origin
+  monitor: "landscape",                          // or an output name like "DP-2"
+}
+```
+
+Measured 2026-10-09 on GNOME: **1920x1080 on a 1920x1080 display**, against a
+640x480 control in the same session. Decorations are stripped before the
+resize — the other order leaves the client area a titlebar short.
+`monitor: "landscape"` is for a rig whose primary is a rotated portrait panel.
 
 Non-fatal by default: no `xdotool`/`x11-utils`, no window manager, a missing
 workspace or a non-Linux host produces an `onWarning` and a `"skipped"` report,
@@ -251,6 +278,25 @@ spawns Dolphin itself.
 | `AUDIO_BACKENDS`, `NULL_AUDIO_BACKEND`, `BACKGROUND_RECORD`, `DEFAULT_GLCAPTURE_LIB` | constants |
 
 ## CLI (for non-Node consumers)
+
+Two subcommands. `record` builds the profile too, so a Python or shell consumer
+needs no Node shim:
+
+```sh
+dolphin-runner record \
+  --dolphin <AppImage> --iso <melee.iso> --slp <game.slp> \
+  --out <dir> --user-dir <dir> --efb-scale 2 \
+  [--comm <path>] [--base-name dump] [--display :1] \
+  [--start-frame -123] [--end-frame N] [--last-frame N] \
+  [--dump-codec ffv1|utvideo|mpeg4] [--bitrate-kbps N] [--aspect-ratio 6] \
+  [--texture-pack <dir> ...] [--gecko-ini <file>] [--silent] [--background] \
+  [--hard-timeout-ms N] [--shader-cache <dir>] [--fresh-profile] \
+  [--workspace N [--undecorate --geometry 1920x1080 --monitor landscape]]
+```
+
+Events on stdout, one JSON line each: `started`, `progress`, `warning`,
+`placed`, `result` (with `avi`, `wav`, `lastFrame`, `stalled`, `stoppedEarly`),
+`error`. Exit code is non-zero on failure.
 
 ```sh
 dolphin-runner obs-mirror \

@@ -11,8 +11,23 @@
 import { parseArgs } from "node:util";
 import { readFileSync } from "node:fs";
 import { obsMirror } from "./obs.ts";
+import { BACKGROUND_RECORD, buildProfile } from "./profile.ts";
+import { record } from "./run.ts";
 
 const USAGE = `usage:
+  dolphin-runner record --dolphin <bin> --iso <iso> --slp <replay.slp>
+                        --out <dir> --user-dir <dir> --efb-scale <n>
+                        [--base-name dump] [--comm <path>] [--display <:N>]
+                        [--start-frame -123] [--end-frame <n>] [--last-frame <n>]
+                        [--aspect-ratio 6] [--bitrate-kbps <n>] [--dump-codec ffv1|utvideo|mpeg4]
+                        [--gecko-ini <file>] [--game-settings-id GALE01]
+                        [--texture-pack <dir> ...] [--silent] [--background]
+                        [--shader-cache <dir>] [--fresh-profile]
+                        [--hard-timeout-ms <n>] [--boot-stall-ms 90000] [--frame-stall-ms 30000]
+                        [--workspace <n> [--placement-required]] [--undecorate]
+                        [--geometry WxH[+X+Y]] [--monitor landscape|<output>]
+  events: started, progress, warning, placed, result, error
+
   dolphin-runner obs-mirror --dolphin <bin> --iso <iso> --user-dir <dir> --comm <path>
                             --capture-name <name> --efb-scale <n>
                             [--replay <slp>] [--real-time]
@@ -154,9 +169,140 @@ async function obsMirrorCmd(argv: string[]) {
   process.exit(r.code ?? (r.signal ? 128 : 1));
 }
 
+/** `WxH` or `WxH+X+Y`. */
+function parseGeometry(v: string | undefined): { x?: number; y?: number; width: number; height: number } | undefined {
+  if (v == null) return undefined;
+  const m = /^(\d+)x(\d+)(?:\+(-?\d+)\+(-?\d+))?$/.exec(v.trim());
+  if (!m) throw new Error(`--geometry must be WxH or WxH+X+Y, got ${JSON.stringify(v)}`);
+  return {
+    width: +m[1]!,
+    height: +m[2]!,
+    ...(m[3] != null ? { x: +m[3]!, y: +m[4]! } : {}),
+  };
+}
+
+async function recordCmd(argv: string[]) {
+  const { values: v } = parseArgs({
+    args: argv,
+    strict: true,
+    options: {
+      dolphin: { type: "string" },
+      iso: { type: "string" },
+      slp: { type: "string" },
+      out: { type: "string" },
+      "user-dir": { type: "string" },
+      "base-name": { type: "string" },
+      comm: { type: "string" },
+      display: { type: "string" },
+      "start-frame": { type: "string" },
+      "end-frame": { type: "string" },
+      "last-frame": { type: "string" },
+      "efb-scale": { type: "string" },
+      "aspect-ratio": { type: "string" },
+      "bitrate-kbps": { type: "string" },
+      "dump-codec": { type: "string" },
+      "gecko-ini": { type: "string" },
+      "game-settings-id": { type: "string" },
+      "texture-pack": { type: "string", multiple: true },
+      silent: { type: "boolean", default: false },
+      background: { type: "boolean", default: false },
+      "shader-cache": { type: "string" },
+      "fresh-profile": { type: "boolean", default: false },
+      "hard-timeout-ms": { type: "string" },
+      "boot-stall-ms": { type: "string" },
+      "frame-stall-ms": { type: "string" },
+      workspace: { type: "string" },
+      "placement-required": { type: "boolean", default: false },
+      undecorate: { type: "boolean", default: false },
+      geometry: { type: "string" },
+      monitor: { type: "string" },
+    },
+  });
+  for (const k of ["dolphin", "iso", "slp", "out", "user-dir", "efb-scale"] as const) {
+    if (!v[k]) throw new Error(`--${k} is required`);
+  }
+
+  const paths = { dolphinPath: v.dolphin!, isoPath: v.iso! };
+  const codec = v["dump-codec"];
+  if (codec != null && !["ffv1", "utvideo", "mpeg4"].includes(codec)) {
+    throw new Error(`--dump-codec must be ffv1, utvideo or mpeg4 (never h264 — it drops the last ~50 frames)`);
+  }
+
+  // The CLI builds the profile too: a consumer that can only shell out would
+  // otherwise need a Node shim just to call buildProfile, which is exactly the
+  // shim melee_skins had to write.
+  await buildProfile(v["user-dir"]!, {
+    mode: "record",
+    dolphinPath: paths.dolphinPath,
+    efbScale: num(v["efb-scale"], "efb-scale"),
+    aspectRatio: num(v["aspect-ratio"], "aspect-ratio") as 5 | 6 | undefined,
+    bitrateKbps: num(v["bitrate-kbps"], "bitrate-kbps"),
+    dumpCodec: codec as "ffv1" | "utvideo" | "mpeg4" | undefined,
+    geckoIni: v["gecko-ini"] ? readFileSync(v["gecko-ini"], "utf8") : undefined,
+    gameSettingsId: v["game-settings-id"],
+    texturePacks: v["texture-pack"],
+    silent: v.silent,
+    shaderCacheDir: v["shader-cache"],
+    freshProfile: v["fresh-profile"],
+    ...(v.background ? BACKGROUND_RECORD : {}),
+  });
+
+  const workspace = num(v.workspace, "workspace");
+  if (v["placement-required"] && workspace == null) throw new Error("--placement-required needs --workspace");
+  const geometry = parseGeometry(v.geometry);
+  if ((geometry || v.undecorate || v.monitor) && workspace == null) {
+    throw new Error("--geometry/--undecorate/--monitor need --workspace (placement is what applies them)");
+  }
+
+  let lastReported = -Infinity;
+  const res = await record(paths, v.slp!, {
+    outDir: v.out!,
+    userDir: v["user-dir"]!,
+    baseName: v["base-name"],
+    commPath: v.comm,
+    display: v.display,
+    startFrame: num(v["start-frame"], "start-frame"),
+    endFrame: num(v["end-frame"], "end-frame"),
+    lastFrame: num(v["last-frame"], "last-frame"),
+    hardTimeoutMs: num(v["hard-timeout-ms"], "hard-timeout-ms"),
+    bootStallMs: num(v["boot-stall-ms"], "boot-stall-ms"),
+    frameStallMs: num(v["frame-stall-ms"], "frame-stall-ms"),
+    placement:
+      workspace != null
+        ? {
+            workspace,
+            required: v["placement-required"],
+            ...(geometry ? { geometry } : {}),
+            ...(v.undecorate ? { undecorate: true } : {}),
+            ...(v.monitor ? { monitor: v.monitor } : {}),
+          }
+        : undefined,
+    onWarning: (w) => emit({ event: "warning", ...w }),
+    onSpawn: (pid) => emit({ event: "started", pid, replay: v.slp }),
+    // Throttled: one line per ~600 frames is a progress bar, not a flood.
+    onFrame: (current, end) => {
+      if (current - lastReported < 600 && current < end) return;
+      lastReported = current;
+      emit({ event: "progress", current, end });
+    },
+  });
+  emit({
+    event: "result",
+    avi: res.avi,
+    wav: res.wav,
+    lastFrame: res.lastFrame,
+    stalled: res.stalled,
+    stoppedEarly: res.stoppedEarly,
+    placement: res.placement,
+    ...(res.diagnostic ? { diagnostic: res.diagnostic } : {}),
+  });
+}
+
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   switch (cmd) {
+    case "record":
+      return recordCmd(rest);
     case "obs-mirror":
       return obsMirrorCmd(rest);
     case undefined:

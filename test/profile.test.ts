@@ -255,3 +255,86 @@ test("window: fullscreen sets Fullscreen=True and leaves the geometry keys alone
   assert.equal(getInSection(dol, "Display", "Fullscreen"), "True");
   assert.equal(getInSection(dol, "Display", "RenderWindowWidth"), null);
 });
+
+// --- things consumers had to do by hand after calling buildProfile ----------
+
+test("REGRESSION: EFBScale is set in EVERY section, not just [Settings]", async () => {
+  // Ishiiruka keeps a second one under [Hacks]. Two consumers independently
+  // patched all occurrences after calling us because leaving them disagreeing
+  // dumps at the wrong internal resolution.
+  fs.writeFileSync(
+    path.join(realRoot, "Config", "GFX.ini"),
+    ["[Settings]", "EFBScale = 4", "UseFFV1 = True", "[Hacks]", "EFBScale = 4", "EFBScaledCopy = True", ""].join("\n"),
+  );
+  await buildProfile(userDir, { mode: "record", efbScale: 2 });
+  const gfx = read(path.join(userDir, "Config", "GFX.ini"));
+  assert.equal(getInSection(gfx, "Settings", "EFBScale"), "2");
+  assert.equal(getInSection(gfx, "Hacks", "EFBScale"), "2");
+});
+
+test("record mode pins the dump container — 'produced no video' after a full run is not a diagnosis", async () => {
+  await buildProfile(userDir, { mode: "record" });
+  const gfx = read(path.join(userDir, "Config", "GFX.ini"));
+  assert.equal(getInSection(gfx, "Settings", "DumpFormat"), "avi");
+  assert.equal(getInSection(gfx, "Settings", "DumpFramesAsImages"), "False");
+});
+
+test("dumpFormat is overridable for a consumer that wants something else", async () => {
+  await buildProfile(userDir, { mode: "record", dumpFormat: "mkv" });
+  assert.equal(getInSection(read(path.join(userDir, "Config", "GFX.ini")), "Settings", "DumpFormat"), "mkv");
+});
+
+test("play mode does not touch the dump container", async () => {
+  await buildProfile(userDir, { mode: "play" });
+  assert.equal(getInSection(read(path.join(userDir, "Config", "GFX.ini")), "Settings", "DumpFormat"), null);
+});
+
+test("texture packs are linked into Load/Textures/<gameId>/ and turn HiresTextures on", async () => {
+  const pack = path.join(tmp, "my-pack");
+  fs.mkdirSync(pack, { recursive: true });
+  fs.writeFileSync(path.join(pack, "tex_abc.png"), "x");
+  await buildProfile(userDir, { mode: "record", texturePacks: [pack] });
+  const dest = path.join(userDir, "Load", "Textures", "GALE01", "my-pack");
+  assert.ok(fs.existsSync(path.join(dest, "tex_abc.png")), "the pack's files are reachable");
+  assert.equal(getInSection(read(path.join(userDir, "Config", "GFX.ini")), "Settings", "HiresTextures"), "True");
+});
+
+test("texture packs follow gameSettingsId, not a hardcoded GALE01", async () => {
+  const pack = path.join(tmp, "p2");
+  fs.mkdirSync(pack, { recursive: true });
+  await buildProfile(userDir, { mode: "record", texturePacks: [pack], gameSettingsId: "GALJ01" });
+  assert.ok(fs.existsSync(path.join(userDir, "Load", "Textures", "GALJ01", "p2")));
+});
+
+test("a re-run repoints a texture pack instead of stacking onto the old one", async () => {
+  const a = path.join(tmp, "pack-a");
+  fs.mkdirSync(a, { recursive: true });
+  fs.writeFileSync(path.join(a, "a.png"), "a");
+  await buildProfile(userDir, { mode: "record", texturePacks: [a] });
+  fs.writeFileSync(path.join(a, "b.png"), "b");
+  await buildProfile(userDir, { mode: "record", texturePacks: [a] });
+  const dest = path.join(userDir, "Load", "Textures", "GALE01", "pack-a");
+  assert.deepEqual(fs.readdirSync(dest).sort(), ["a.png", "b.png"]);
+});
+
+test("GC/SRAM.raw is carried into a record profile — the language and sound settings", async () => {
+  fs.mkdirSync(path.join(realRoot, "GC"), { recursive: true });
+  fs.writeFileSync(path.join(realRoot, "GC", "SRAM.raw"), "sram-bytes");
+  await buildProfile(userDir, { mode: "record" });
+  assert.equal(read(path.join(userDir, "GC", "SRAM.raw")), "sram-bytes");
+});
+
+test("a missing SRAM.raw is normal, never fatal", async () => {
+  await buildProfile(userDir, { mode: "record" }); // no GC/ in the fixture
+  assert.ok(!fs.existsSync(path.join(userDir, "GC", "SRAM.raw")));
+});
+
+test("copyFromProfile carries arbitrary assets and replaces the SRAM default", async () => {
+  fs.mkdirSync(path.join(realRoot, "GC"), { recursive: true });
+  fs.writeFileSync(path.join(realRoot, "GC", "SRAM.raw"), "sram");
+  fs.mkdirSync(path.join(realRoot, "Load"), { recursive: true });
+  fs.writeFileSync(path.join(realRoot, "Load", "thing.bin"), "t");
+  await buildProfile(userDir, { mode: "record", copyFromProfile: ["Load/thing.bin"] });
+  assert.equal(read(path.join(userDir, "Load", "thing.bin")), "t");
+  assert.ok(!fs.existsSync(path.join(userDir, "GC", "SRAM.raw")), "the caller's list replaces the default");
+});
