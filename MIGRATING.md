@@ -152,7 +152,12 @@ shelling out to something else.
 
 Surveyed 2026-10-09. Line numbers were right then; check before trusting them.
 
-### lm-clipper — not yet adopted
+### Lunar `apps/clipper` (was standalone lm-clipper) — not yet adopted
+
+The live copy is `~/Projects/lunar/apps/clipper`; `~/Projects/lm-clipper` is a
+stale standalone checkout — ignore it. Line numbers below are the standalone
+one's and are a few off in `apps/clipper` (spawn at `slpToVideo.ts:480`,
+preview at `VideoManager.ts:1091`).
 
 Three spawn sites: recording (`src/main/slpToVideo.ts:458`), clip preview
 (`src/main/managers/VideoManager.ts:1065`) and "Test Dolphin" (`:1293`).

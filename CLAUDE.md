@@ -302,11 +302,13 @@ migration order, each with its own codec/speed advice and caveats).
 
 Status as of 2026-10-09: jungle_media's VOD recorder and melee_skins consume
 it; MST is on the `obs-mirror` CLI behind a flag, so its old path still exists;
-Lunar's `apps/media` vendors a drifted fork; lm-clipper, replay_archiver and
-kotj still spawn their own.
+Lunar's `apps/media` vendors a drifted fork and its `apps/clipper` (the live
+copy of lm-clipper — `~/Projects/lm-clipper` is a stale checkout, ignore it)
+still spawns its own, as does replay_archiver. kotj does not spawn Dolphin.
 
-1. `lm-clipper` — it has the tested profile half already; byte-compare output
-   before/after.
+1. Lunar — both apps in one pass: `apps/media` (delete the vendored fork) and
+   `apps/clipper` (the live lm-clipper; it has the tested profile half
+   already). Byte-compare output before/after.
 2. `jungle_media` — the main event. It keeps its ffmpeg mux, duration guard,
    workspace parking and upload; only the spawn is replaced. Note it currently
    uses a persistent `data/dolphin-user`; moving to throwaway profiles is the

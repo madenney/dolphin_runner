@@ -55,67 +55,16 @@ wants `utvideo`; native-resolution clips should keep FFV1 unless the output is
 a draft; a **live mirror must stay at `emulationSpeed: 1`** — 0 fast-forwards
 on air with crackling audio.
 
+**Whatever you expose, expose it in the UI.** These are user-facing trade-offs
+— quality against time against disk — and a codec choice that lives only in an
+undocumented config key gets forgotten, then rediscovered as a mystery
+performance difference between two machines. Every prompt below says where
+that app's settings surface is. If an app genuinely has no UI, it goes in that
+app's README and its example config, not nowhere.
+
 ---
 
-## 1. lm-clipper
-
-> You're working in `~/Projects/lm-clipper`. Migrate its Dolphin launching onto
-> `slippi-dolphin-runner` (`~/Projects/dolphin_runner`, GitHub
-> `madenney/dolphin_runner`, pin **`#v0.5.1`**).
->
-> Read `MIGRATING.md` in that repo first — §2 is the delete-this checklist and
-> §8 has a section for lm-clipper naming specific files and lines. `README.md`
-> is the API reference. Do not vendor a copy; add it as a git dependency in the
-> root `package.json` (webpack bundles the main process, it's zero-dependency
-> pure JS, so nothing extra ships in the AppImage/NSIS output).
->
-> You have three spawn sites and they map to two different functions:
-> - recording (`src/main/slpToVideo.ts:458`) → `buildProfile({mode:"record"})` + `record()`
-> - clip preview (`src/main/managers/VideoManager.ts:1065`) and "Test Dolphin"
->   (`:1293`) → `buildProfile({mode:"play"})` + `play()`, which is a frame range
->   on screen with no dump. It keeps `--cout`, so you can delete the 1-second
->   no-frame timer you use to guess a clip has finished — the end frame is
->   detected numerically.
->
-> Delete, don't port: your `killTree` (`slpToVideo.ts:219`) kills **only the
-> direct child**, so the AppImage's emulator survives every cancel; your
-> end-frame match (`slpToVideo.ts:312`, `VideoManager.ts:1157`) is
-> `line.includes(...)`, the substring bug where `845` matches inside `8454` and
-> truncates a dump to a tenth; `VideoManager.ts:1137` splits stdout on `\r\n`
-> only, which never splits Linux output at all; your `dolphinStderr +=`
-> accumulators are unbounded across an all-night batch;
-> `buildWorkerProfile` (`:1471`) only rewrites ini lines that already exist, so
-> a profile that has never dumped silently records at **window** resolution;
-> `setDolphinDumping` (`:1662`) is `healRealProfile()`.
->
-> Keep: your ffmpeg chain, worker pool, retries, overlay rendering, length-scaled
-> timeouts, and your own output guard.
->
-> Two things to pass that you don't today: `commPath` (your N workers share one
-> `outputDir`, and the default comm filename is fixed — they'd overwrite each
-> other's and each would record the other's replay, silently), and
-> `texturePacks` + `cacheHiresTextures: false` instead of symlinking packs
-> yourself (`:167`).
->
-> One behaviour you lose: `record()` always passes `-b`, so your
-> `config.fullscreen` toggle has no equivalent on the record path. Flag it if
-> that matters rather than working around it.
->
-> **Speed:** you record at native (EFB 2) with FFV1, which is 0.77× realtime —
-> the encoder is the limit, not the GPU, and Dolphin encodes on one thread. For
-> final clips keep FFV1. For draft/preview renders, `dumpCodec: "mpeg4"` plus
-> `emulationSpeed: 0` measured **3.0–3.6× realtime** (about −6 dB, mild
-> softening) — worth exposing as a "fast draft" option. Three parallel FFV1
-> workers give 2.2× aggregate, so parallelism is still your main lever for
-> final quality. Never `h264`: it drops the last ~52 frames.
->
-> Verify by byte-comparing one clip's dump before and after
-> (`MIGRATING.md` §5). If they differ, diff the two `--user` `Config/*.ini` —
-> the usual cause is a key your old builder set that the package inherits from
-> the source profile instead. Note **Windows is unverified at runtime** in this
-> package; you ship an NSIS build, so test there before releasing.
-
-## 2. Lunar — the whole repo (`apps/media` **and** `apps/clipper`)
+## 1. Lunar — the whole repo (`apps/media` **and** `apps/clipper`)
 
 > You're working in `~/Projects/lunar`. **Two** apps here spawn Slippi Playback
 > Dolphin, and both should end up on `slippi-dolphin-runner`
@@ -250,6 +199,30 @@ on air with crackling audio.
 > main lever at final quality. utvideo at EFB 4 (even width) would also work
 > for clipper if you ever raise its resolution — same unmeasured caveat.
 >
+> ### Every speed option needs a UI control
+>
+> These are user-facing trade-offs — quality against time against disk — so
+> they do not belong in a config file only you know about. Whatever you expose,
+> expose it in the interface, with a tooltip that states the trade-off in the
+> terms above.
+>
+> `apps/clipper` already has the pattern: `src/constants/config.ts` registers
+> each setting with a label, tooltip and description, and
+> `src/renderer/components/SettingsModal.tsx` / `StudioSettings.tsx` render
+> them. `resolution` (`config.ts:1720`, *"Higher = sharper but slower"*) and the
+> keep-the-FFV1-master toggle (`:1826`) are exactly the right precedent. Add
+> the codec/draft-mode controls beside them — e.g. a **"Fast draft"** toggle
+> that sets `dumpCodec: "mpeg4"` + `emulationSpeed: 0`, with a tooltip saying
+> roughly *"3–4× faster, slightly softer — for review copies, not finals"*, and
+> leave the default on FFV1 so nobody ships a draft by accident.
+>
+> `apps/media` takes its settings through `config.record.*`
+> (`src/studio/steps/record.js:169`). Find where that object is authored — if
+> it is the website or the orchestrator rather than media itself, add the
+> control there. A codec choice that only exists as an undocumented key will be
+> forgotten and then rediscovered as a mystery performance difference between
+> two machines.
+>
 > ### Verify, and two caveats
 >
 > The bar is **byte-identical output**, not "it ran" — `MIGRATING.md` §5 has
@@ -262,13 +235,11 @@ on air with crackling audio.
 > - **Windows is unverified at runtime** in this package. Path resolution is
 >   unit-tested and the `taskkill` branch exists, but nobody has run it.
 >   `apps/clipper` ships an NSIS build, so test there before releasing it.
-> - **Before you start `apps/clipper`:** `~/Projects/lm-clipper` is a separate
->   checkout of the same codebase, and the repo root has a `sync-packages`
->   script. Ask Matt whether those two are meant to stay in sync — if they are,
->   migrating one without the other will produce a conflict, and only one of
->   them should be done.
+> - `~/Projects/lm-clipper` is a **stale standalone checkout of this same
+>   codebase. Ignore it.** `apps/clipper` is the live one; do not migrate or
+>   sync the other.
 
-## 3. jungle — `apps/media`
+## 2. jungle — `apps/media`
 
 > You're working in `~/Projects/jungle`, app `apps/media`. It already uses
 > `slippi-dolphin-runner` via `DOLPHIN_RUNNER_DIR` but still hand-rolls a lot
@@ -310,12 +281,20 @@ on air with crackling audio.
 > utvideo. `emulationSpeed: 0` won't help at EFB 6 (encoder-bound) and is
 > bit-identical when it does apply. Never `h264` — it drops the last ~52 frames.
 >
+> **Surface the codec choice in the UI.** This is a quality/time/disk
+> trade-off the operator should be able to make per job, not a constant buried
+> in the render step — and if two machines end up on different codecs by
+> accident, the difference will show up as an unexplained speed gap. Put it
+> wherever `apps/media`'s render settings are authored, with a tooltip stating
+> the trade-off (utvideo: near-lossless, ~8× faster than FFV1, ~12 GB/game of
+> scratch; mpeg4 150 Mb/s: much smaller, slightly lossy; mpeg4 60 Mb/s: don't).
+>
 > Caveat: **the Jungle box runs Openbox and placement was only measured on
 > GNOME/mutter.** It degrades to an `onWarning` plus a `"skipped"` report
 > rather than failing, so adopting is safe — but verify parking actually
 > happens there before relying on it, and report back what you find.
 
-## 4. jungle — `apps/mst`
+## 3. jungle — `apps/mst`
 
 > You're working in `~/Projects/jungle`, app `apps/mst` (Rust/Tauri). It
 > already spawns `dolphin-runner obs-mirror` but only behind a flag. Read
@@ -361,7 +340,7 @@ on air with crackling audio.
 > upstream** — only finished replays were available. That's your live case, so
 > test it deliberately and report back.
 
-## 5. replay_archiver
+## 4. replay_archiver
 
 > You're working in `~/Projects/replay_archiver`. Migrate its Dolphin launching
 > onto `slippi-dolphin-runner` (`madenney/dolphin_runner`, pin **`#v0.5.1`**).
@@ -400,6 +379,12 @@ on air with crackling audio.
 > where it applies, and only helps when the encoder isn't the bottleneck.
 > Parallelism is the other lever: three utvideo workers give 2.07× aggregate.
 > Never `h264` — it drops the last ~52 frames at SIGTERM.
+>
+> **Make the codec a documented, operator-visible setting**, not a constant in
+> `media.js`. If replay_archiver has no UI, put it in its config schema with a
+> comment stating the trade-off and mention it in the README — a bulk archiver
+> running 8× slower than it needs to, because nobody knew there was a knob, is
+> the failure mode here.
 
 ---
 
