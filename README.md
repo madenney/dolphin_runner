@@ -93,22 +93,155 @@ if (got < expectedSec * 0.9) throw new Error("dump is short — re-record");
 
 ## API
 
+Every export is public — there is no internal/private split. Types live in
+`src/types.ts` and their JSDoc is the long-form version of everything below.
+
+### `record(paths, slp, opts) → Promise<RecordResult>`
+
+Frame-dump one replay. Spawns Dolphin with `-b` (batch), watches `--cout` for
+frames, SIGTERMs at the end frame so the `.avi`/`.wav` finalise, and resolves.
+
+```ts
+const res = await record({ dolphinPath, isoPath }, "/path/game.slp", {
+  outDir: "/tmp/out",
+  userDir: "/tmp/worker-1",   // REQUIRED, one per concurrent Dolphin
+});
+// → { avi, wav, lastFrame, stalled, diagnostic, placement }
+```
+
+**Resolves even when the watchdog fired** (`stalled: true`); see "A stall is not
+a failure". It rejects only when there is nothing to judge: a bad path, an
+unreadable `lastFrame`, a missing `userDir`, an aborted signal, or a hang that
+produced no `.avi` at all.
+
+`RecordResult`: `avi` (path), `wav` (path or `null`), `lastFrame` (so you can
+length-check without re-reading the `.slp` — expected seconds =
+`(lastFrame + 123) / 60`), `stalled`, `diagnostic` (a `StallDiagnostic` when
+the watchdog fired, else `null`), `placement` (a `PlacementReport` or `null`).
+
+### `obsMirror(paths, opts) → Promise<ObsMirrorHandle>`
+
+A long-lived Dolphin another process captures in OBS through obs-vkcapture's
+GL path. No `-b`, no watchdog — idling on "waiting for game" is healthy.
+
+```ts
+const commPath = "/tmp/setup-1/comm.json";
+const h = await obsMirror(paths, {
+  userDir: "/tmp/setup-1",
+  commPath,
+  captureName: "dolphin-1",   // what the OBS vkcapture source matches
+  efbScale: 2,                // REQUIRED
+  pulseSink: "game1",
+});
+// h = { pid, env, exited, placement, stop() }
+writeMirrorComm(commPath, nextReplay);   // re-point it; Dolphin reloads itself
+await h.stop();                          // SIGKILLs the tree
+```
+
+The caller owns the comm file. Nothing here watches anything.
+
+### `buildProfile(userDir, opts) → Promise<void>`
+
+Builds the throwaway `--user` profile: copies every real `Config/*.ini`, then
+applies your overrides to the copies. **Never writes the real profile.**
+Anything you do not set keeps the source profile's value — including the dump
+codec and `UseFFV1`, which are the consumer's choice, not ours.
+
+Pass `dolphinPath` (to locate the real profile) or `sourceProfile` (to override
+that resolution — an Electron host whose `app.getPath('appData')` disagrees).
+
+#### Profile options
+
+| option | default | what it does |
+|---|---|---|
+| `mode` | — | `"record"` (dump flags on, hotkeys detached, `PauseOnFocusLost` forced off) or `"play"` |
+| `efbScale` | source | `[Settings] EFBScale`, an **enum not a multiplier**: 0 auto, 1 auto-integral, 2 = 1x native, 3 = 1.5x, 4 = 2x, 5 = 2.5x, 6 = 3x, 7 = 4x, 8 = 5x. **Always pass it** (gotcha 17) |
+| `aspectRatio` | source | 6 = Force16:9, 5 = Force4:3 |
+| `dumpCodec` | source | `"ffv1"` \| `"utvideo"` \| `"mpeg4"`. The real speed lever — see below |
+| `bitrateKbps` | source | mpeg4 only; stops helping past ~141 Mb/s at EFB 6 |
+| `geckoIni` | copied | raw `GALE01.ini` text, written verbatim |
+| `gameSettingsId` | `GALE01` | which `GameSettings/<id>.ini` to write |
+| `silent` | off | `[DSP] Backend = "No audio output"`. **The WAV dump is unaffected** — it comes off the mixer before any backend. The mute for recording; never for a mirror |
+| `audioBackend` | source | must be in `AUDIO_BACKENDS`; unknown values make Dolphin silently mute, so we throw |
+| `audioLatencyMs` | source | `[Core] Latency`. Must not be 0 for a live feed |
+| `volume` | source | **no-op on Linux** — Pulse/ALSA never implement SetVolume |
+| `pauseOnFocusLost` | `false` in record mode | with `true`, a Dolphin that loses focus pauses and the run dies to the watchdog |
+| `keepWindowOnTop` | source | `[Display] KeepWindowOnTop` |
+| `detachHotkeys` | on in record mode | writes a `Hotkeys.ini` bound to no device, so a focus-stealing Dolphin can't eat keystrokes |
+| `window` | source | `{ fullscreen: true }` or `{ width, height, x?, y? }`. **Oversize windows become 640x480** — Dolphin's own clamp, not the WM's |
+| `gfxBackend` | source | `"OGL"` \| `"Vulkan"`. OGL is required for obs-vkcapture |
+| `emulationSpeed` | source | `[Core] EmulationSpeed`; 1 = real time, 0 = unlimited |
+| `vsync`, `shaderCompilationMode`, `msaa` | source | GFX tuning |
+| `shaderCacheDir` | none | symlinks `<userDir>/Cache` here so shaders survive a throwaway dir. **Per instance** — a shared cache corrupts |
+| `freshProfile` | off | build from empty inis instead of copying the real profile |
+| `sourceProfile` | resolved | override where the real profile is |
+
+`BACKGROUND_RECORD` is a preset to spread in: `pauseOnFocusLost: false`,
+`keepWindowOnTop: false`, `vsync: false`, `window: { width: 640, height: 360 }`.
+
+**Codec, the real speed lever.** Dolphin encodes on one thread and that thread
+is the recording speed limit (measured; `docs/background-and-mute.md`):
+`ffv1` is lossless but 0.77x realtime at native and **0.10x at EFB 6**;
+`utvideo` is ~bit-exact and 0.81x at EFB 6 but needs an even dump width (so it
+is refused at `efbScale: 2`, which is 939 wide) and writes ~12 GB per 75 s game;
+`mpeg4` is lossy and fast. `h264` is refused — it drops the last ~50 frames.
+
+#### Run options (`record` and `obsMirror`)
+
+| option | default | what it does |
+|---|---|---|
+| `userDir` | — | **REQUIRED.** The dump path is a property of the user dir, so two Dolphins sharing one silently overwrite each other's frames |
+| `display` | inherited | `DISPLAY` for the GL context |
+| `env` | — | extra environment; the named options below win over it |
+| `audioSink` | — | sets `PULSE_SINK` **and** `PIPEWIRE_NODE` (the ALSA backend ignores the former) |
+| `appName` | — | `application.name` for the audio stream. WirePlumber remembers volume/mute **by that name**, and every Dolphin is otherwise `dolphin-emu` — hand-mute one and every future Dolphin starts muted |
+| `placement` | — | `{ workspace, required?, restoreFocus?, timeoutMs? }` — see below |
+| `signal` | — | `AbortSignal`; aborting SIGKILLs the tree |
+| `onFrame` | — | `(current, end) => void`, record only |
+| `onSpawn` | — | `(pid) => void`, once, as soon as there is a pid |
+| `onWarning` | — | `(w: RunnerWarning) => void` — things skipped but not fatal |
+| `bootStallMs` | `90000` | no first frame within this = hung boot. Must cover Dolphin start + ISO load |
+| `frameStallMs` | `30000` | frames stopped this long mid-record = frozen |
+| `startFrame` | `-123` | record only; the pre-GO! lead-in |
+| `endFrame` | the `.slp`'s | record only. **Must be finite** or Dolphin idles forever |
+| `baseName` | `"dump"` | record only; `<baseName>.avi` / `.wav` |
+
+#### Placement (Linux/X11)
+
+`placement: { workspace }` parks **this** Dolphin's windows on an EWMH
+workspace (0-based: GNOME's "Workspace 10" is `9`), finding them **by pid**.
+Never by title — every Playback window is WM_CLASS `AppRun.wrapped` with the
+same title, which is how the copy-pasted parkers grabbed each other's Dolphins.
+
+Non-fatal by default: no `xdotool`/`x11-utils`, no window manager, a missing
+workspace or a non-Linux host produces an `onWarning` and a `"skipped"` report,
+and the Dolphin runs unparked. `required: true` refuses to spawn instead.
+`restoreFocus` (default `true`) hands focus back afterwards, only to a window
+on your current workspace so it can never switch workspaces on you.
+
+The report: `{ workspace, status, windows }` where `status` is `"placed"`
+(all mapped windows are there), `"partial"` (the WM left some elsewhere —
+also warned), `"none-found"` (nothing mapped before the timeout) or
+`"skipped"`. Needs `xdotool` and `x11-utils`; `checkPlacement()` is the
+preflight if you want to know before you spawn.
+
+`placeWindows(pid, opts)` is the same thing standalone, for a caller that
+spawns Dolphin itself.
+
+#### Helpers
+
 | | |
 |---|---|
-| `record(paths, slp, opts)` | frame-dump → `{ avi, wav, lastFrame, stalled, diagnostic }` |
-| `obsMirror(paths, opts)` | long-lived, OBS-capturable Dolphin (obs-vkcapture GL path) → handle with `stop()` |
-| `buildProfile(userDir, opts)` | throwaway `--user` profile from a copy of the real one |
-| `BACKGROUND_RECORD` | profile preset for a recording that stays out of the way (no focus pause, not on top, no vsync, 640x360) — spread it into `buildProfile` |
-| `AUDIO_BACKENDS`, `NULL_AUDIO_BACKEND` | the `[DSP] Backend` strings Dolphin knows; anything else silently mutes, so `buildProfile` refuses it |
-| `recordEnv`, `appNameProp` | the env `record()` spawns with, pure |
-| `placeWindows(pid, opts)`, `checkPlacement(opts)` | park one process tree's windows on a workspace (Linux/X11, needs xdotool + x11-utils); for callers that spawn Dolphin themselves |
-| `healRealProfile(dolphinPath)` | force the real profile's dump flags off |
-| `dolphinStatus(paths)` | human-readable reason, or `null` |
-| `lastFrameOf(slp)` | last frame from the UBJSON footer |
-| `killTree(pid, graceful?)` | kill a process and everything it spawned |
-| `writeMirrorComm(path, slp)` | re-point a running mirror at the next game |
-| `parseFrameLine`, `reachedEnd`, `foldEnd` | the stdout rules, pure and tested |
-| `setInSection`, `setEverywhere`, `getInSection` | the ini editor |
+| `dolphinStatus(paths)` / `dolphinConfigured(paths)` | why we can't run, as a human sentence, or `null` |
+| `lastFrameOf(slp)` | last frame from the UBJSON footer — a byte scan, no slippi-js |
+| `healRealProfile(dolphinPath)` | the one deliberate write to the real profile: force its dump flags off, to undo damage from older in-place versions |
+| `writeMirrorComm(path, slp)` / `writeComm` / `buildComm` | the comm file Dolphin reads |
+| `pidTree(pid)` / `killTree(pid, graceful?)` | the tree walk and the kill. `graceful` = SIGTERM then SIGKILL |
+| `recordEnv`, `obsMirrorEnv`, `obsMirrorArgs`, `appNameProp` | exactly what gets spawned, pure and unit-tested |
+| `parseFrameLine`, `reachedEnd`, `foldEnd` | the `--cout` rules, pure and unit-tested |
+| `setInSection`, `setEverywhere`, `getInSection` | the ini editor (`setInSection` creates a missing key *and* section) |
+| `resolveRealProfile`, `realProfileRoot`, `profileAt`, `appDataPath` | where a profile lives, per OS |
+| `AUDIO_BACKENDS`, `NULL_AUDIO_BACKEND`, `BACKGROUND_RECORD`, `DEFAULT_GLCAPTURE_LIB` | constants |
 
 ## CLI (for non-Node consumers)
 
