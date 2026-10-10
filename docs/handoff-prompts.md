@@ -115,12 +115,16 @@ on air with crackling audio.
 > the source profile instead. Note **Windows is unverified at runtime** in this
 > package; you ship an NSIS build, so test there before releasing.
 
-## 2. Lunar — `apps/media`
+## 2. Lunar — `apps/media` (and note `apps/clipper`)
 
-> You're working in `~/Projects/lunar`. `apps/media/src/vendor/dolphin-runner/`
-> is a **vendored copy** of `slippi-dolphin-runner` pinned to an old commit.
-> Delete it and depend on the real package (`madenney/dolphin_runner`, pin
-> **`#v0.5.1`**). Its own README already says not to edit it in place.
+> You're working in `~/Projects/lunar`. Two apps in this repo spawn Slippi
+> Playback Dolphin; this task is **`apps/media`**. Read the note about
+> `apps/clipper` at the end before you start, so you don't half-migrate the repo.
+>
+> `apps/media/src/vendor/dolphin-runner/` is a **vendored copy** of
+> `slippi-dolphin-runner` pinned to an old commit. Delete it and depend on the
+> real package (`madenney/dolphin_runner`, pin **`#v0.5.1`**). Its own README
+> already says not to edit it in place.
 >
 > Read `MIGRATING.md` §8 in `~/Projects/dolphin_runner` — it has a Lunar
 > section listing exactly what your fork is missing and which of your
@@ -137,11 +141,13 @@ on air with crackling audio.
 > - `scanLastFrame`/`withLastFrame` (`src/studio/steps/record.js:97-132`). You
 >   **rewrite the replay file** because `lastFrameOf` returned null on
 >   anonymised ranked replays. That fallback is now built in (it walks the raw
->   event stream; verified against 429 real replays), and `record()` also
->   accepts `lastFrame` or just `endFrame`.
+>   event stream; verified against 429 real replays — 428 identical to the
+>   footer, one 1 frame higher), and `record()` also accepts `lastFrame` or
+>   just `endFrame`.
 > - The GFX re-patching at `record.js:189-195` — `DumpFormat`,
 >   `DumpFramesAsImages`, `HiresTextures` and `EFBScale`-in-every-section are
->   all `buildProfile` options now.
+>   all `buildProfile` options now (`setEverywhere('EFBScale', …)` at `:194`
+>   in particular: the package writes `[Hacks]` too).
 > - The hard-timeout AbortController (`:149`) → `hardTimeoutMs`, which SIGTERMs
 >   and **resolves** with `stalled: true` instead of rejecting and throwing the
 >   partial dump away.
@@ -151,12 +157,37 @@ on air with crackling audio.
 > (`media.js:40`) still has no option in the package; keep generating it, or
 > raise it upstream.
 >
-> **Speed:** you dump mpeg4 at 60 Mb/s, which measures 0.93× realtime but shows
-> **visible blocking on fast frames**. At your EFB, `dumpCodec: "utvideo"` is
-> 0.81× and bit-exact after 4:2:0 (budget ~12 GB of scratch per game per worker
-> and delete the dump after the mux); if disk is tight use mpeg4 at
-> `bitrateKbps: 150000`+, never 60000. `emulationSpeed: 0` won't help you — at
-> high EFB the encoder is already the bottleneck.
+> **Speed — read the caveat, the numbers do not transfer directly.** Dolphin
+> encodes the dump on ONE thread and never tunes the encoder, so the codec is
+> the speed choice. You run `DEFAULT_EFB_SCALE = 4` (2×, 1878x1056) with
+> `UseFFV1 = False` and `bitrateKbps: 60000`. The upstream measurements were
+> taken at **EFB 6 and EFB 2, not EFB 4**, so treat the ratios as directional:
+> - At EFB 6, mpeg4 at 60 Mb/s measured 0.93× realtime but showed **visible
+>   blocking on fast frames**, and mpeg4 caps out around 141 Mb/s. If you are
+>   keeping mpeg4, raise `bitrateKbps` to 150000; 60000 is the one value
+>   measured to look bad.
+> - `dumpCodec: "utvideo"` is near-lossless (bit-exact after 4:2:0 at EFB 6)
+>   and about 8× faster than FFV1 there. It needs an **even dump width**, and
+>   yours is 1878, so it should work — but **utvideo at EFB 4 is unmeasured**.
+>   Try it, compare a dump against an FFV1 dump of the same replay, and budget
+>   scratch disk (it was ~12 GB/game at EFB 6, so expect several GB at EFB 4).
+> - `emulationSpeed: 0` is bit-identical output, but only helps when the
+>   encoder is not already the bottleneck — at your resolution it probably is.
+> - Never `dumpCodec: "h264"`: it drops the last ~52 frames at SIGTERM.
+>
+> Verify the swap by byte-comparing one render's dump before and after
+> (`MIGRATING.md` §5), and report back any ratio you measure at EFB 4 — nobody
+> has that number yet.
+>
+> **`apps/clipper` is a separate, un-migrated consumer.** It is a copy of
+> lm-clipper's code and spawns Dolphin itself at `src/main/slpToVideo.ts:480`,
+> `src/main/managers/VideoManager.ts:1091` and `:1293`. It still has the
+> substring end-frame bug (`line.includes('[CURRENT_FRAME] 845')` matches
+> inside `8454` and truncates a dump to a tenth) and a kill that only reaches
+> the direct child, so the AppImage's emulator survives every cancel. It is
+> **out of scope for this task** — migrating it is the same job as lm-clipper,
+> which has its own prompt. Don't start it without checking whether
+> `apps/clipper` and `~/Projects/lm-clipper` are meant to stay in sync.
 
 ## 3. jungle — `apps/media`
 
