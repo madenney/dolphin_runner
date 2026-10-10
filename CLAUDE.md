@@ -267,7 +267,11 @@ Each of these cost somebody an event. The comments in the code say so; keep them
   binary. Do not claim Windows support until someone runs it on a Windows box.
 - **`record()` is verified on Linux only by `npm run smoke`, by hand.** First
   passing run 2026-09-18: 4383-frame replay, AVI 75.07 s vs 75.10 s expected,
-  no stall, no leaked processes, real profile byte-identical.
+  no stall, no leaked processes, real profile byte-identical. Re-run 2026-10-09
+  after the background/placement changes to `run.ts`/`kill.ts`/`profile.ts`:
+  same numbers (98.6 s wall, ratio 1.000). The smoke path does NOT exercise
+  placement, `silent`, `audioSink`, `appName` or a non-default `dumpCodec` —
+  those were verified by hand (docs/background-and-mute.md).
 
 ## Migration order, when it is time
 
