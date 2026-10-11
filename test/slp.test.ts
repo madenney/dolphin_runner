@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -6,6 +6,9 @@ import path from "node:path";
 import { lastFrameOf, lastFrameFromEvents, lastFrameFromFooter } from "../src/slp.ts";
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dr-slp-"));
+// The suite shares a process and these are fixtures, not artifacts — remove them.
+// Hundreds of `dr-slp-*` dirs had accumulated in /tmp before this existed.
+after(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
 /** A synthetic replay footer: …"lastFrame"l<int32be>… */
 function fakeSlp(name: string, frame: number, marker = "l"): string {
