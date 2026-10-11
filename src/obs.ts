@@ -17,7 +17,7 @@ const DEFAULT_WINDOW = { fullscreen: true } as const;
 
 /**
  * The environment an OBS-capturable Dolphin needs. Pure, so the tests can
- * pin the exact shape MST depends on.
+ * pin the exact shape the stream tool depends on.
  *
  * LD_PRELOAD order matters: the exe-override shim goes FIRST so its readlink
  * wins, whatever the caller already had stays in the middle, and glcapture

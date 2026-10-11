@@ -1,3 +1,15 @@
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Ad-hoc verification runs. `undefined/` is the classic: a hand-run with an
+# unset env var builds a profile under the literal string, and a broad
+# `git add -A` then commits a COPY OF THE REAL PROFILE — ISO path, replay dir,
+# memcard paths and Dolphin's analytics ID. That happened once (fa7874c).
+undefined/
+scratch/
+*.avi
+*.wav
+
+# Internal migration bookkeeping: maps private consumer repos by file and line.
+docs/local/

@@ -85,7 +85,7 @@ function fakeX(
 test("windows are found BY PID — another process's Dolphin is never touched", async () => {
   const wins: Record<string, FakeWin> = {
     "100": { pid: 42, mapped: true, desktop: 0 },
-    "200": { pid: 77, mapped: true, desktop: 0 }, // someone else's, e.g. MST's on-air mirror
+    "200": { pid: 77, mapped: true, desktop: 0 }, // someone else's, e.g. a stream tool's on-air mirror
   };
   const { x, log } = fakeX(wins);
   const r = await placeWindows(42, { workspace: 9, timeoutMs: 200 }, x).done;
@@ -347,7 +347,7 @@ test("monitor 'landscape' skips a rotated portrait primary", async () => {
   const wins: Record<string, FakeWin> = { "1": { pid: 5, mapped: true, desktop: 0 } };
   const { x, shaped } = fakeX(wins, {
     monitors: [
-      { name: "PORTRAIT", x: 0, y: 0, width: 1080, height: 1920 }, // the primary on MST's rig
+      { name: "PORTRAIT", x: 0, y: 0, width: 1080, height: 1920 }, // the primary on the stream tool's rig
       { name: "WIDE", x: 1080, y: 0, width: 1920, height: 1080 },
     ],
   });

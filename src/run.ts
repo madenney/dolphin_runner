@@ -128,7 +128,7 @@ async function runDolphin(
       if (settled) return;
       // The HARD cap, if asked for. The stall windows only catch SILENCE; a
       // Dolphin that keeps printing frames but never reaches the end is not
-      // silent and never trips them, so both jungle_media and replay_archiver
+      // silent and never trips them, so both the VOD recorder and the archiver
       // had to bolt their own wall-clock timer on top. Unlike an abort, this
       // RESOLVES: the dump so far is real footage and the caller's duration
       // guard is what should judge it.

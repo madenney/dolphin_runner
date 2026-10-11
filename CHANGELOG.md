@@ -12,10 +12,10 @@ Until 1.0 the minor is the breaking digit: `0.x.0` may break, `0.x.y` never does
 
 - **`obs-mirror` did not accept `--undecorate`, `--geometry` or `--monitor`.**
   They were added to `record` and `play` in 0.5.0 and missed on `obs-mirror` —
-  the one subcommand the window-shaping work existed for, since MST needs an
+  the one subcommand the window-shaping work existed for, since the stream tool needs an
   undecorated 1080p surface on a landscape output and its primary is a rotated
   portrait panel. The CLI exited with `Unknown option`, so the documented
-  recipe in the handoff prompt could not work. Caught by MST's own test, which
+  recipe in the handoff prompt could not work. Caught by the stream tool's own test, which
   had pinned the broken behaviour as expected (2026-10-11).
 
   Verified against a real Dolphin after the fix: `obs-mirror … --workspace 0
@@ -30,7 +30,7 @@ Until 1.0 the minor is the breaking digit: `0.x.0` may break, `0.x.y` never does
 
 Documentation only — no code changed. Tagged so consumers pinning a version
 get the corrected guidance, since `docs/` ships in the package. All of it came
-from the melee_skins consumer's v0.4.0 → v0.5.1 upgrade (verified
+from the skins tool's v0.4.0 → v0.5.1 upgrade (verified
 byte-identical, audio and video).
 
 **Measurements** (`docs/background-and-mute.md`), RTX 5080 + i9-12900K:
@@ -71,7 +71,7 @@ README:
 
 ## 0.5.2 — 2026-10-10
 
-Everything here was reported by the Lunar consumer after migrating both its
+Everything here was reported by the a consumer consumer after migrating both its
 apps (`apps/media` dc5711c, `apps/clipper` 775c5d8), the first project to go
 end to end on this package.
 
@@ -93,7 +93,7 @@ end to end on this package.
   `moduleResolution: node10` does not need a hand-written `.d.ts` re-export.
 - `recordArgs()` exported, pure and tested, alongside `playArgs`.
 
-**Measurements** folded into `docs/background-and-mute.md`, from Lunar's rig
+**Measurements** folded into `docs/background-and-mute.md`, from a consumer's rig
 (RTX 3060) — these settle the EFB 4 caveat the handoff prompts carried:
 
 - EFB 4: FFV1 0.34× realtime, **utvideo 1.81×** (5.3× faster, bit-identical
@@ -115,7 +115,7 @@ end to end on this package.
 - **`play()` and `dolphin-runner play`** — a frame range on screen with no
   dump. The package had two launch shapes and needed three: `record()` dumps
   and runs hidden in batch, `obsMirror()` wants OBS capture env and a mirror
-  comm with no frame range. A clip PREVIEW is neither, and lm-clipper has two
+  comm with no frame range. A clip PREVIEW is neither, and the clip tool has two
   spawn sites that are exactly it (its preview window and "Test Dolphin").
   Without this, the first project due to migrate would have had to stop and
   ask for it.
@@ -164,7 +164,7 @@ carrying; `MIGRATING.md` §8 names which project and which lines to delete.
   itself. Measured 2026-10-09: **1920x1080 on a 1920x1080 display, against a
   640x480 control**. Decorations are stripped before the resize; the other
   order leaves the client area a titlebar short, which is what a capture grabs.
-  This was the last thing blocking MST from deleting its title-matching parker.
+  This was the last thing blocking the stream tool from deleting its title-matching parker.
 - **Profile options** `texturePacks` / `texturePackMode` / `hiresTextures` /
   `cacheHiresTextures` (two consumers hand-copied packs into
   `Load/Textures/<gameId>/` and rewrote the ini we had just written),
@@ -210,7 +210,7 @@ options. Researched and measured 2026-10-08/09; the evidence for every claim is
   `commPath` you own and returns a handle, instead of resolving on exit.
 - **`obsMirror`'s default `emulationSpeed` is now `1` (was `0`).** At `0` a
   mirror pointed at a finished or partly-written replay fast-forwards on air
-  with crackling audio. MST always passed `1` explicitly and is unaffected.
+  with crackling audio. The stream tool always passed `1` explicitly and is unaffected.
   Pass `emulationSpeed: 0` to keep the old behaviour.
 - **`audioBackend` is now a checked enum** (`AudioBackend` / `AUDIO_BACKENDS`),
   not `string`. Dolphin silently falls back to *no audio* on any value it does
@@ -258,10 +258,10 @@ options. Researched and measured 2026-10-08/09; the evidence for every claim is
 
 ## 0.3.0 — 2026-10-08
 
-`obs-mirror` parity with MST's own launcher, so MST can delegate to the CLI.
+`obs-mirror` parity with the stream tool's own launcher, so the stream tool can delegate to the CLI.
 
 - `freshProfile` — build the `--user` dir from empty inis instead of copying the
-  real Playback profile, which is what MST's legacy launch did.
+  real Playback profile, which is what the stream tool's legacy launch did.
 - `msaa` (and SSAA off), `gfxBackend`, `gameSettingsId`, and `--no-capture`
   (`OBS_VKCAPTURE=0`, no `LD_PRELOAD`).
 - `RunOptions.onSpawn(pid)` — hands the pid out as soon as there is one, so a
@@ -270,7 +270,7 @@ options. Researched and measured 2026-10-08/09; the evidence for every claim is
 ## 0.2.0 — 2026-09-19
 
 - `obsMirror()` and the `dolphin-runner obs-mirror` CLI: a long-lived,
-  OBS-capturable Dolphin for a stream tool, reproducing MST's spawn (env, ini
+  OBS-capturable Dolphin for a stream tool, reproducing the stream tool's spawn (env, ini
   keys, comm format, no `-b`). Config is written **only** into the throwaway
   `--user` dir; the shared profile is never touched.
 - `buildMirrorComm()` / `writeMirrorComm()` — the caller re-points a running
@@ -283,8 +283,8 @@ options. Researched and measured 2026-10-08/09; the evidence for every claim is
 ## 0.1.0 — 2026-09-18
 
 The extraction: one tested implementation of a recipe that had been
-copy-pasted across five projects, merged from `jungle_media`'s runtime half and
-`lm-clipper`'s profile half. Each had bugs the other had already fixed; both
+copy-pasted across five projects, merged from the VOD recorder's runtime half and
+the clip tool's profile half. Each had bugs the other had already fixed; both
 are fixed here, with regression tests named after the bug.
 
 - `record()`, `buildProfile()`, `healRealProfile()`, `dolphinStatus()`,

@@ -29,7 +29,7 @@ export function setEverywhere(text: string, key: string, value: string): string 
 /**
  * Set `key` inside `[section]`, creating the key — and the section — if absent.
  *
- * The creating half is the point. lm-clipper's builder only rewrites lines that
+ * The creating half is the point. The clip tool's builder only rewrites lines that
  * already exist, so a real profile missing `InternalResolutionFrameDumps` (a
  * fresh install that has never dumped) silently produces a dump at window
  * resolution instead of internal. Nothing downstream can tell; the footage is

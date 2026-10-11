@@ -1,7 +1,7 @@
 /**
  * The preview launch shape. The package had only `record()` (batch, dumps,
  * hidden) and `obsMirror()` (OBS capture env, mirror comm with no frame
- * range); a clip preview is neither, and lm-clipper has two spawn sites that
+ * range); a clip preview is neither, and the clip tool has two spawn sites that
  * are exactly this. These pin what makes it a preview rather than a dump.
  */
 import { test } from "node:test";

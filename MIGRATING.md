@@ -21,7 +21,7 @@ Read `README.md` for the API and `CHANGELOG.md` before you pin a version.
 | Rust, Python, shell, anything else | the `dolphin-runner` CLI — see §6 |
 
 **Do not vendor a copy into your repo.** That is the exact failure this package
-exists to end, and it has already happened once (Lunar's `apps/media` carries a
+exists to end, and it has already happened once (a consumer's `apps/media` carries a
 fork that has silently drifted). If you need a change, change it here.
 
 Pin a tag or a commit, not a branch. The minor version is the breaking digit
@@ -173,7 +173,7 @@ tree; exit code is Dolphin's. Build it with `npm ci && npm run build` →
 `dist/cli.js`.
 
 If your driver does not consume the progress events, keeping a small Node shim
-that imports the package directly is a perfectly good choice — melee_skins did
+that imports the package directly is a perfectly good choice — one consumer did
 exactly that, deliberately.
 
 ## 7. Platform reality
@@ -187,177 +187,3 @@ exactly that, deliberately.
   the `taskkill` branch exists; nobody has run it. Do not claim Windows support
   on the strength of this package.
 
-## 8. Per-project notes
-
-Surveyed 2026-10-09. Line numbers were right then; check before trusting them.
-
-### Lunar `apps/clipper` — ADOPTED 2026-10-10 (commit 775c5d8)
-
-Done. `record()` for recording, `play()` for preview and Test Dolphin; the
-substring end-frame match, the `\r\n` split, the 1 s preview timer, the
-unbounded stderr, the parent-only `killTree`, both profile builders and
-`setDolphinDumping` are all gone. Uses `commPath` per clip, `texturePacks` +
-`cacheHiresTextures: false`; finals pin `dumpCodec: "ffv1"` and a "Fast Draft"
-UI toggle uses mpeg4 + `emulationSpeed: 0`. Verified byte-identical `.avi` and
-`.wav` against the old spawn; nothing survived; the real profile untouched.
-
-Two things it found on the way out: the old builder's `startsWith('EFBScale')`
-also clobbered `EFBScaledCopy`, and **Test Dolphin had been running on the
-operator's real profile**.
-
-`~/Projects/lm-clipper` is a stale standalone checkout — ignore it. Historical
-notes below; line numbers are the standalone one's.
-
-Three spawn sites: recording (`src/main/slpToVideo.ts:458`), clip preview
-(`src/main/managers/VideoManager.ts:1065`) and "Test Dolphin" (`:1293`).
-
-Delete: `killTree` (`slpToVideo.ts:219`) — it kills **only the direct child**,
-so the AppImage's emulator survives every cancel; the end-frame match at
-`slpToVideo.ts:312` and `VideoManager.ts:1157` — both `line.includes(...)`, the
-**substring bug** (`845` matches inside `8454`); `VideoManager.ts:1137`'s
-`chunk.split('\r\n')`, which never splits Linux output at all; the unbounded
-`dolphinStderr +=` accumulators; `buildWorkerProfile` (`:1471`), which only
-rewrites existing ini lines and so **silently dumps at window resolution** on a
-profile that has never dumped; `setDolphinDumping` (`:1662`) → `healRealProfile`.
-
-Keep: the 5-stage ffmpeg chain, the worker pool and retry logic, overlay
-rendering, length-scaled ffmpeg timeouts.
-
-Needs, now supported: `commPath` (N workers share one `outDir`),
-`texturePacks` + `cacheHiresTextures: false` (`:167`), `-b` is always on —
-its `config.fullscreen` toggle has no equivalent, raise it if that matters.
-Its preview window and "Test Dolphin" are frame-range playback with `--cout`
-watched — that is `play()`, added in 0.5.1 for exactly these two sites. Build
-the profile with `mode: "play"`, then `play(paths, slp, { userDir, startFrame,
-endFrame })`; it resolves when the end frame is reached. `--cout` is kept, so
-the end is detected by the numeric frame rule rather than their 1-second
-no-frame timer.
-
-### jungle `apps/media` — ADOPTED 2026-10-11
-
-Real dependency at `#v0.5.3` (was a loose `DOLPHIN_RUNNER_DIR` checkout, which
-meant a `npm run build` upstream changed how it recorded). Its own parking
-loop and `dolphinLegacy.js` are gone, and it added a `RUNNER_VERSION` startup
-check so a `node_modules` that isn't the pinned version refuses to record —
-worth copying.
-
-### replay_archiver — ADOPTED 2026-10-11
-
-Pinned `#v0.5.3`, imports `buildProfile`/`record`/`healRealProfile`, uses
-`commPath` per replay. The substring end-frame match is gone. It runs
-`healRealProfile()` and logs it, to undo the damage from years of recording
-on the operator's real profile.
-
-### Lunar `apps/media` — ADOPTED 2026-10-10 (commit dc5711c)
-
-Done. The vendored fork is deleted, `scanLastFrame`/`withLastFrame` and the
-GFX re-patching are gone, `hardTimeoutMs` replaced its own timer, and the
-ffprobe duration guard and `nice` wrapper stayed. Codec is a dashboard setting
-(`record.dumpCodec`) sent with each job; default `utvideo`, `mpeg4` at
-`efbScale 2`. Verified byte-identical `.avi`+`.wav` — **once `DumpCodec` was
-blanked**, which is why `dumpCodec: "default"` now exists (0.5.2).
-
-Historical notes below.
-
-What that fork is missing: all of `place.ts`, `onSpawn`, `recordEnv`,
-`BACKGROUND_RECORD`, `AUDIO_BACKENDS`, `dumpCodec`, `silent`,
-`pauseOnFocusLost`, `freshProfile`, `gameSettingsId`. It still carries the
-removed `mirror()`, the `emulationSpeed ?? 0` default that fast-forwards a
-mirror on air, and the `taskkill` spawn with no `error` handler that crashes
-the host. Nothing in it is a local improvement worth keeping.
-
-Then delete these workarounds, which this version makes unnecessary:
-`scanLastFrame`/`withLastFrame` (`record.js:97-132`) — it **rewrote the replay
-file** because `lastFrameOf` returned null; that fallback is now built in, and
-`lastFrame`/`endFrame` are accepted directly. The GFX re-patching at
-`record.js:189-195` — `DumpFormat`, `DumpFramesAsImages`, `HiresTextures` and
-`EFBScale`-everywhere are all `buildProfile` options now. The hard-timeout
-AbortController (`:149`) → `hardTimeoutMs`.
-
-Keep: the ffprobe duration guard (`:270`) — it is the model for what every
-consumer should do with `stalled`. The `nice`/`ionice` wrapper script
-(`media.js:40`) still has no option; keep generating it or raise it.
-
-### jungle `apps/media` — adopted, but still hand-rolling
-
-Loads via `DOLPHIN_RUNNER_DIR` and `import()` (`src/lib/render/dolphinRunner.js:40`),
-preferring `dist/` over `src/`. **So `npm run build` in this repo changes its
-behaviour** — build deliberately, or point it at a pinned checkout.
-
-Uses only `buildProfile`, `profileAt`, `record`. Still hand-rolls, all now
-available: its own `xdotool` parking loop (`dolphinShared.js:75`) → `placement`
-(and it has no focus restore, so it leaves focus in a parked window); `pgrep -f`
-pid discovery (`dolphinRunner.js:175`, whose comment "record() does not hand
-out the pid" is stale) → `onSpawn`; its own `pidTree`, `lastFrameOf`,
-`dolphinStatus`; the hard-timeout AbortController (`:149`) → `hardTimeoutMs`;
-the `cp GC/SRAM.raw` (`:165`) → now copied by default in record mode.
-
-`isoStageShots.js` aborts mid-dump to grab N frames around a moment, which
-SIGKILLs and rejects, then rebuilds the path by hand (`:402-414`). Return
-`"stop"` from `onFrame` instead: SIGTERM, and `record()` resolves with
-`stoppedEarly: true`.
-
-`dolphinLegacy.js` is dead behind `MEDIA_DOLPHIN_LEGACY=1`. Delete it.
-
-### jungle `apps/mst` — on the CLI behind a flag
-
-Spawns `dolphin-runner obs-mirror` when `MST_DOLPHIN_RUNNER=1` or
-`useDolphinRunner` (`dolphin.rs:876`). **The fallback at `dolphin.rs:802` is a
-warning, not an error** — if the CLI is missing it silently runs the legacy
-path, so the flag alone does not prove adoption.
-
-The blocker is now fixed: MST's parker exists because it must strip decorations
-and moveresize onto a landscape output (its primary is a rotated portrait
-panel), which `ProfileOptions.window` cannot do. Use
-`--workspace N --undecorate --geometry 1920x1080 --monitor landscape`. Measured
-here: **1920x1080 vs a 640x480 control**. Then delete the title-matching parker
-at `slippi.rs:92-240` — it matches on `["dolphin","faster melee","playback","slippi"]`
-and **grabs other projects' Dolphins**, which is the bug `place.ts` exists for.
-
-Still not covered, keep in MST: `pactl load-module module-null-sink` (the
-runner takes a sink name but will not create one), `queue`-mode comm for
-back-to-back playback, `DOLPHIN_EXEC_FLAG`, and scraping `obs-gamecapture` for
-the glcapture lib path.
-
-Before deleting the legacy body: `launch_dolphin_playback_for_setup_internal`
-(`dolphin.rs:681`) is **not** behind the flag and shares `ini_set`,
-`write_dolphin_config`, `write_gfx_config` and `setup_user_dir` with it — they
-cannot be deleted while it lives.
-
-Note MST uses `DOLPHIN_RUNNER` (a CLI path) while jungle media uses
-`DOLPHIN_RUNNER_DIR` (a checkout). Two names, one checkout.
-
-### replay_archiver — not yet adopted, and mutating the real profile
-
-`media.js:135` spawns with **no `--user` at all**, so every worker runs on the
-operator's real profile and `media.js:25-110` rewrites it in place. That is
-gotcha 14, and `NUM_WORKERS` concurrent Dolphins sharing one profile is
-gotcha 15. Adopting fixes both; run `healRealProfile()` once to undo the damage.
-
-Delete: the comm writer (`media.js:112`), the `line.includes` substring match
-and CRLF-only split (`childProc.js:77-101`), the process-group kill
-(`childProc.js:8`), the wall-clock watchdog (`childProc.js:54`) →
-`hardTimeoutMs`.
-
-It takes its frame range from its database and never reads the footer, so pass
-`lastFrame` (or just `endFrame`) — `record()` no longer insists on reading it.
-Its shared `workingGamesDir` needs `commPath` per worker.
-
-### melee_skins — ADOPTED, up to date 2026-10-10
-
-On v0.5.1, using `texturePacks` and `resolveRealProfile` instead of its own
-pack copy and hardcoded GameSettings path. Upgrade from v0.4.0 verified
-byte-identical, audio and video.
-
-It **keeps `tools/rec.mjs` on purpose** — the Python side does not consume the
-CLI's progress events, so moving to `dolphin-runner record` would be churn for
-no gain. A thin shim that imports the package is a fine end state; the point
-was never to use the CLI, it was to stop re-implementing the spawn.
-
-It contributed the EFB 3 numbers and the boot-time finding in
-`docs/background-and-mute.md`.
-
-### kotj — nothing to do
-
-Does not spawn Dolphin. Its `dolphins_up` is a status field relayed from the
-machine agent.

@@ -8,21 +8,21 @@ One job: **given a `.slp` and a profile, spawn an isolated Slippi *Playback*
 Dolphin and either frame-dump it or mirror it live — without hangs, leaked
 processes, or mutating the user's real Dolphin profile.**
 
-It exists because that recipe was copy-pasted across five projects
-(`jungle_media`, `lm-clipper`, `replay_archiver`, `kotj`, `MST`) and every fork
-re-learned the same OS-level gotchas, usually by shipping a bug first. The
-design doc that started this is `/home/matt/Projects/lm-clipper/DOLPHIN_RUNNER_DESIGN.md`
-— read §5 before changing anything in `run.ts`.
+It exists because that recipe was copy-pasted across five projects — two VOD
+recorders, a clip tool, an archiver and a stream tool — and every fork re-learned
+the same OS-level gotchas, usually by shipping a bug first. The design doc that
+started it lives with the clip tool, outside this repo; its §5 (the spawn
+lifecycle) is the part to read before changing anything in `run.ts`.
 
-**Status: standalone, barely consumed.** This is its own repo again
-(github `madenney/dolphin_runner`); it lived in the jungle monorepo as
-`packages/dolphin-runner` until 2026-10-08. Consumers, all loading it from disk
-(it is not published): jungle_media's default VOD recorder
-(`jungle/apps/media/src/lib/render/dolphinRunner.js`, via `DOLPHIN_RUNNER_DIR`),
-melee_skins (`~/Projects/sandbox/melee_skins/tools/rec.mjs`, `dist/`), and MST's
-flag-guarded `obs-mirror` CLI path (`jungle/apps/mst/src-tauri/src/dolphin.rs`;
-no MSAA option yet). Lunar's `apps/media` vendors an older copy (no `onSpawn`)
-that drifts from this one. Changes here reach live consumers — check them.
+**Status: standalone, and consumed.** This is its own repo again
+(github `madenney/dolphin_runner`); it lived in a monorepo as
+`packages/dolphin-runner` until 2026-10-08. It is not on npm — consumers install
+it from a git tag (`npm i github:madenney/dolphin_runner#vX.Y.Z`) and pin it, so
+changes here reach them only when they bump. Six projects spawn Dolphin: two VOD
+recorders, a clip tool, a skins tool, an archiver (all migrated and pinned) and a
+stream tool, which drives the `obs-mirror` CLI behind its own off-by-default flag
+while its legacy launch is still the path its live events run on. Cut a tag for
+anything a consumer needs; don't expect anyone to track `main`.
 
 Background running and muting (hiding, focus, audio, codec speed) were researched
 and tested 2026-10-08: `docs/background-and-mute.md`. Several gotchas below were
@@ -33,15 +33,15 @@ window, audio or speed options.
 
 This package is a MERGE of two implementations, and neither was complete:
 
-| | from `jungle_media` | from `lm-clipper` |
+| | from the VOD recorder | from the clip tool |
 |---|---|---|
 | runtime | AbortSignal, `pidTree` kill, bounded stderr tail, numeric `>=`, "a stall is a silence" | `readline` line handling, `[GAME_END_FRAME]`, two-tier stall, Windows `taskkill` |
 | profile | (had none — a persistent hand-tuned dir) | throwaway `--user` builder, cross-OS resolution, heal, the tests |
 
-**Each had bugs the other had already fixed.** lm-clipper matched the end frame
+**Each had bugs the other had already fixed.** The clip tool matched the end frame
 by substring (`845` matches inside `8454` → truncated dumps) and killed only the
 direct child on POSIX (an AppImage execs, so the emulator survives).
-jungle_media had no `[GAME_END_FRAME]`, one coarse stall window, and no Windows
+The VOD recorder had no `[GAME_END_FRAME]`, one coarse stall window, and no Windows
 path at all. Both are fixed here, with regression tests named after the bug.
 
 ## Commands
@@ -113,7 +113,7 @@ every helper is API. Two layers:
   `record()`/`obsMirror()` take `placement: { workspace, geometry?, undecorate?,
   monitor? }`; never fatal unless `required`.
 - `cli.ts` — `dolphin-runner record …`, `play …` and `obs-mirror …`, the process boundary
-  for non-Node consumers (MST is Rust, melee_skins and replay_archiver drive it
+  for non-Node consumers (the stream tool is Rust, the skins tool and the archiver drive it
   from Python). One JSON line per event on stdout (`started`, `progress`,
   `warning`, `placed`, `result`, `stopping`, `exited`, `error`); foreground
   until Dolphin exits; SIGINT/SIGTERM/SIGHUP forwarded to the whole tree.
@@ -141,7 +141,7 @@ Only `types.ts` and the doc comments describe the contract; the JSDoc on
 **Zero runtime dependencies.** `dependencies` is `{}` and must stay `{}`. In
 particular **no slippi-js** — `lastFrameOf` is a byte scan of the UBJSON footer
 because one int32 is all this package needs from a replay. Verified against 356
-real replays: identical to jungle_media's implementation on every one.
+real replays: identical to the VOD recorder's implementation on every one.
 
 **No Electron import, ever.** `appDataPath()` resolves config dirs by platform.
 An Electron host that disagrees passes `sourceProfile` explicitly. A hard
@@ -222,7 +222,7 @@ Each of these cost somebody an event. The comments in the code say so; keep them
 17. **Consumers must pass `efbScale`.** Omitting it inherits the real profile's
     value, which is whatever the user last played at. The first smoke run
     inherited `EFBScale = 7` and produced a 25 GB lossless AVI at ~4 fps for a
-    75 s game. lm-clipper sets it from its own config; jungle_media must too.
+    75 s game. The clip tool sets it from its own config; the VOD recorder must too.
 18. **The orphaned `Slippi_Playback` process is the AppImage FUSE daemon, not
     the emulator.** The runtime `exec`s into `AppRun.wrapped` (= `dolphin-emu`),
     so the emulator IS our direct child and `killTree` reaches it. The daemon
@@ -262,20 +262,20 @@ Each of these cost somebody an event. The comments in the code say so; keep them
     whatever you send. A parked Dolphin KEEPS keyboard focus until something
     else takes it — `restoreFocus` hands it back (~1 s), only to a window on
     the user's current workspace so it can't switch workspaces on them.
-    Openbox (the Jungle box) is untested.
+    Openbox (the event box) is untested.
 
 ## Known unfinished
 
-- **`obsMirror()` is the mirror.** MST's spawn
-  (`melee_stream_tool/src-tauri/src/dolphin.rs`) was read 2026-09-19 and
+- **`obsMirror()` is the mirror.** The stream tool's spawn
+  (a Rust/Tauri app, outside this repo) was read 2026-09-19 and
   `obsMirror` reproduces it: same env, same ini keys, same comm format, no
-  `-b`. Differences on purpose: profile is copy-then-override (MST wrote into a
+  `-b`. Differences on purpose: profile is copy-then-override (the stream tool wrote into a
   bare dir), LD_PRELOAD is composed directly instead of via the
   `obs-gamecapture` wrapper, and it never writes the shared profile. Proven by
   hand 2026-09-19: OBS "Dolphin 2" vkcapture source rendered the instance at
   1920x1080 via GL (no libvulkan mapped), Pulse routed to `game2` under the
   shim's name. NOT yet proven: a live, growing `.slp` (only a finished one was
-  available); that path is MST's comm-rewrite loop, unchanged. Re-pointing a
+  available); that path is the stream tool's comm-rewrite loop, unchanged. Re-pointing a
   PARKED mirror with a normal-mode comm was proven 2026-10-08 (new game in ~3 s,
   same capture client); a mirror-mode comm on a FINISHED .slp idles forever.
 - **Windows is UNVERIFIED at runtime.** Path *resolution* is unit-tested; nobody
@@ -293,30 +293,22 @@ Each of these cost somebody an event. The comments in the code say so; keep them
 
 ## Migration order
 
-**The migrations are the deliverable; this package is not.** The plan is to
+**The migrations were the deliverable; this package was not.** The plan was to
 finish and document the runner here, then hand each consuming project's agent a
-prompt pointing at `MIGRATING.md` — not to edit those projects from this repo.
-Those prompts are written: `docs/handoff-prompts.md` (one per project, in
-migration order, each with its own codec/speed advice and caveats).
-`MIGRATING.md` §8 holds the per-project notes; keep it current as each lands.
+prompt pointing at `MIGRATING.md` — never to edit those projects from this repo.
+That is done: the prompts were written and handed over on 2026-10-11.
 
-Status as of 2026-10-11. **Done:** Lunar `apps/media` (dc5711c) and
-`apps/clipper` (775c5d8), melee_skins, jungle `apps/media`, and
-`replay_archiver`. `~/Projects/lm-clipper` is a stale checkout, ignore it.
-**Only one left: jungle `apps/mst`** — it is on the `obs-mirror` CLI but
-behind `MST_DOLPHIN_RUNNER`, defaulting OFF, with the legacy launch still the
-path every event has run on. kotj does not spawn Dolphin.
+Where it landed, as of 2026-10-11: five of the six consumers import or shell out
+to this package, pinned to a tag, with their copy-pasted launchers deleted. The
+sixth (the stream tool) has the prompt and is the only one still running its own
+launch. A bracket tool in the same family never spawned Dolphin, and a Python
+converter is kept aligned through this file rather than through code.
+
+The per-project notes and the handoff prompts are NOT in this repo: they map
+private consumer repos by file and line, so they live in `docs/local/`, which is
+gitignored. `MIGRATING.md` keeps only the parts that are useful to any adopter.
 
 Consumers report measurements back; fold them into
 `docs/background-and-mute.md` with the rig and who measured them. The encoder
 is CPU-bound, so numbers do not transfer between machines, and EFB 3/4 came
 from consumers rather than this box.
-
-1. ~~Lunar — both apps.~~ **Done 2026-10-10.**
-2. ~~melee_skins.~~ **Done 2026-10-10** (kept its `rec.mjs` shim on purpose).
-3. ~~jungle `apps/media`.~~ **Done 2026-10-11.**
-4. ~~`replay_archiver`.~~ **Done 2026-10-11.**
-5. jungle `apps/mst` — the last one. Flip `MST_DOLPHIN_RUNNER` on by default
-   and delete the title-matching parker; the window shaping it was waiting for
-   works on `obs-mirror` as of 0.5.4.
-6. `slp2mp4` is Python — keep it aligned via this file, not code.

@@ -7,7 +7,7 @@ import type { RealProfile } from "./types.ts";
  * Where this OS keeps per-user app config.
  *
  * Degrades gracefully when Electron is absent — the package must work for
- * plain-Node consumers (jungle_media) as well as Electron ones (lm-clipper),
+ * plain-Node consumers (the VOD recorder) as well as Electron ones (the clip tool),
  * so we never import electron. An Electron host can pass `sourceProfile`
  * explicitly if `app.getPath('appData')` disagrees with this.
  */

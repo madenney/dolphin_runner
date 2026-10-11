@@ -2,8 +2,8 @@
  * Every subcommand that can park a window must also accept the flags that
  * SHAPE it. `obs-mirror` took `--workspace` but not `--undecorate`,
  * `--geometry` or `--monitor` — and obs-mirror is the one subcommand the
- * shaping work existed for, since MST needs an undecorated 1080p surface on a
- * landscape output. MST's own test caught it as "Unknown option" (2026-10-11).
+ * shaping work existed for, since the stream tool needs an undecorated 1080p surface on a
+ * landscape output. The stream tool's own test caught it as "Unknown option" (2026-10-11).
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";

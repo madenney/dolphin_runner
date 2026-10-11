@@ -1,6 +1,6 @@
 /**
  * The env and argv an OBS-capturable Dolphin is spawned with. This is the
- * contract MST's scene collection depends on: the source is matched by
+ * contract the stream tool's scene collection depends on: the source is matched by
  * OBS_VKCAPTURE_EXE_NAME, the GL hook only works if libobs_glcapture is
  * preloaded, and audio only routes if PULSE_SINK is set.
  */

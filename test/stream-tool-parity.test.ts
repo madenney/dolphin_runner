@@ -1,5 +1,5 @@
 /**
- * MST cut-over parity: everything MST's in-process mirror launch did must be
+ * Stream-tool cut-over parity: everything its in-process mirror launch did must be
  * expressible through obs-mirror — a fresh (non-copied) profile, MSAA, the
  * GALE01r2 GameSettings name, Vulkan-on-request, and a capture-off launch.
  */
@@ -70,7 +70,7 @@ test("freshProfile copies NOTHING from the real profile and creates every overri
   assert.equal(getInSection(gfx, "Settings", "UseFFV1"), null);
   assert.equal(fs.existsSync(path.join(userDir, "Config", "Logger.ini")), false);
   assert.equal(fs.existsSync(path.join(userDir, "GameSettings", "GALE01.ini")), false);
-  // Every key MST's legacy launch wrote exists.
+  // Every key the stream tool's legacy launch wrote exists.
   assert.equal(getInSection(dol, "Core", "GFXBackend"), "OGL");
   assert.equal(getInSection(dol, "Core", "Latency"), "60");
   assert.equal(getInSection(dol, "DSP", "Volume"), "100");
@@ -134,7 +134,7 @@ test("capture off: no preload at all (inherited dropped), vkcapture off, routing
   assert.equal(env.PULSE_LATENCY_MSEC, "120");
 });
 
-test("profile: OGL by default, Vulkan only when asked, MST's knobs pass through", () => {
+test("profile: OGL by default, Vulkan only when asked, the stream tool's knobs pass through", () => {
   const paths = { dolphinPath: "/d/Dolphin", isoPath: "/i/melee.iso" };
   const base = { userDir: "/u", commPath: "/c.json", captureName: "dolphin-1", efbScale: 3 };
   const p = obsMirrorProfile(paths, base);

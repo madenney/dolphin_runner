@@ -117,7 +117,7 @@ export interface ProfileOptions {
   /**
    * RAW `GALE01.ini` text, written verbatim into the throwaway profile.
    *
-   * Deliberately raw rather than a toggle API: jungle_media's profile carries a
+   * Deliberately raw rather than a toggle API: the VOD recorder's profile carries a
    * hand-assembled gecko code (`$Center Align 2P HUD`, with its hex payload)
    * that no generator here would know about, and a "gecko options" surface
    * would silently drop it. Consumers own their codes; we only place them.
@@ -127,7 +127,7 @@ export interface ProfileOptions {
   sourceProfile?: RealProfile;
   /**
    * Start from EMPTY inis instead of copying the real profile: only the keys
-   * set here exist, everything else is Dolphin's default. This is what MST's
+   * set here exist, everything else is Dolphin's default. This is what the stream tool's
    * in-process launch always did (its per-setup dir never saw the real
    * profile), so a feed launched this way looks exactly like a legacy one and
    * no setting in the operator's own Playback profile can leak onto stream.
@@ -135,7 +135,7 @@ export interface ProfileOptions {
   freshProfile?: boolean;
   /**
    * The GameSettings file name the gecko ini is written as (`<id>.ini`).
-   * Default "GALE01" (applies to every revision); MST historically writes
+   * Default "GALE01" (applies to every revision); the stream tool historically writes
    * "GALE01r2" (NTSC 1.02).
    */
   gameSettingsId?: string;
@@ -154,7 +154,7 @@ export interface ProfileOptions {
    * `[Core] Latency` — audio buffer headroom in ms. MUST NOT be 0 for a live
    * feed: a cold launch stalls audio during ISO load + shader compile, the
    * Pulse backend underflows and never recovers, and the feed is silent for
-   * the rest of the session. MST measured 60 as the value that survives
+   * the rest of the session. The stream tool measured 60 as the value that survives
    * launching several Dolphins at once.
    */
   audioLatencyMs?: number;
@@ -467,7 +467,7 @@ export interface ObsMirrorOptions {
   /**
    * Slippi's `isRealTimeMode`. Default FALSE: true parks the playback Dolphin
    * at the live edge waiting on wall-clock and never advances emulation for
-   * the whole game (FPS 0, no DSP, "choppy" feed). MST reproduced this
+   * the whole game (FPS 0, no DSP, "choppy" feed). The stream tool reproduced this
    * 2026-08-10. false plays frames as the `.slp` grows.
    */
   isRealTimeMode?: boolean;
@@ -500,7 +500,7 @@ export interface ObsMirrorOptions {
   /**
    * Default true. False launches the same Dolphin WITHOUT the capture hook:
    * OBS_VKCAPTURE=0 and no LD_PRELOAD at all (an inherited one is dropped
-   * too). MST's load test uses this to tell capture cost from render cost.
+   * too). The stream tool's load test uses this to tell capture cost from render cost.
    */
   capture?: boolean;
 
@@ -508,14 +508,14 @@ export interface ObsMirrorOptions {
   /** REQUIRED. Omitting it would inherit the real profile's — see gotcha 17. */
   efbScale: number;
   /**
-   * Default `{ fullscreen: true }` — what MST's mirror ships, and the only way
+   * Default `{ fullscreen: true }` — what the stream tool's mirror ships, and the only way
    * to get a 1920x1080 surface on a 1920x1080 display (see RenderWindow).
    */
   window?: RenderWindow;
   /**
    * Default 1 (real time). 0 = unlimited would fast-forward on air whenever the
    * mirror is pointed at a finished or partly-written replay, with crackling
-   * Pulse audio. (Before 2026-10-09 the default was 0; MST always passed 1.)
+   * Pulse audio. (Before 2026-10-09 the default was 0; the stream tool always passed 1.)
    */
   emulationSpeed?: number;
   /** Default 60. */
@@ -531,7 +531,7 @@ export interface ObsMirrorOptions {
   freshProfile?: boolean;
   /** See ProfileOptions.gameSettingsId. */
   gameSettingsId?: string;
-  /** See ProfileOptions.detachHotkeys. Off by default for parity with MST. */
+  /** See ProfileOptions.detachHotkeys. Off by default for parity with the stream tool. */
   detachHotkeys?: boolean;
   /** See RunOptions.appName. Pulse `application.name` for this feed. */
   appName?: string;

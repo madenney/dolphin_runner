@@ -7,14 +7,15 @@
  *
  *   node scripts/smoke.ts [replay.slp]
  *
- * Env (defaults are matt's lm-clipper rig):
+ * Env (no defaults for machine paths — see the usage error below):
  *   DOLPHIN   path to Slippi_Playback AppImage/exe
  *   ISO       path to the Melee ISO
  *   DISPLAY   X display for the GL context
  *   KEEP=1    leave the temp dirs behind for inspection
  *   EFB=2     EFBScale for the throwaway profile (default 2). Omitting it in a
- *             consumer inherits the real profile's value — matt's is 7, which
- *             made the first smoke run a 25 GB lossless AVI at ~4 fps.
+ *             consumer inherits the real profile's value — whatever the user
+ *             last played at. On this rig that was 7, which made the first
+ *             smoke run a 25 GB lossless AVI at ~4 fps.
  *
  * ffprobe is used to measure the .avi — that is the CONSUMER's duration guard,
  * simulated here. It is not a dependency of the package.
@@ -33,11 +34,20 @@ const paths = {
   dolphinPath:
     process.env.DOLPHIN ??
     path.join(os.homedir(), ".config", "Slippi Launcher", "playback", "Slippi_Playback-x86_64.AppImage"),
-  isoPath: process.env.ISO ?? "/home/matt/Files/melee/melee(vanilla).iso",
+  isoPath: process.env.ISO ?? "",
 };
-const slp =
-  process.argv[2] ??
-  "/home/matt/Projects/lm-clipper/test_replays/random_lunar_db/Game_20240328T231538.slp";
+const slp = process.argv[2] ?? process.env.SLP ?? "";
+if (!paths.isoPath || !slp) {
+  console.error(
+    "usage: ISO=/path/to/melee.iso npm run smoke -- /path/to/replay.slp\n" +
+      "  ISO      (required) the SSBM ISO\n" +
+      "  SLP      the replay, if not given as the argument\n" +
+      "  DOLPHIN  the Playback AppImage, if not in the default Slippi Launcher location\n" +
+      "  DISPLAY  defaults to :1\n" +
+      "These are machine paths on purpose: nothing identifying is committed here.",
+  );
+  process.exit(2);
+}
 const display = process.env.DISPLAY ?? ":1";
 
 function log(msg: string, extra?: unknown) {

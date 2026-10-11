@@ -16,8 +16,8 @@ const FRAME_BOOKEND = 0x3c;
  * to walking the raw event stream. The fallback is not theoretical: anonymised
  * ranked replays carry metadata with no `lastFrame` at all, and before it
  * existed a consumer worked around the hard failure by REWRITING the replay
- * file with a patched footer (Lunar Studio, `record.js`). Verified against 356
- * real replays: the footer path is identical to jungle_media's implementation
+ * file with a patched footer (one consumer, `record.js`). Verified against 356
+ * real replays: the footer path is identical to the VOD recorder's implementation
  * on every one.
  */
 export function lastFrameOf(slpPath: string): number | null {

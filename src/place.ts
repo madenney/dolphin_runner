@@ -7,9 +7,9 @@ import type { PlacementOptions, PlacementReport, PlacedWindow, RunnerWarning } f
  * EWMH workspace, so a background Dolphin never sits on the user's screen.
  *
  * Why the runner owns this (2026-10-09): four projects had copy-pasted parkers,
- * and two matched windows by TITLE ("dolphin", "slippi", "playback") — so
- * MST's parker grabbed clipper's and jungle_media's recordings, and on the
- * Jungle box the monkeys' netplay windows. Only the code that spawned the
+ * and two matched windows by TITLE ("dolphin", "slippi", "playback") — so one
+ * project's parker grabbed another's in-progress recordings, and on a shared
+ * box someone's netplay window. Only the code that spawned the
  * process knows its pid tree for sure. RULE: windows are found by pid, never
  * by title or class. Every Playback window is WM_CLASS "AppRun.wrapped" with
  * the same title, so nothing else can tell instances apart anyway.

@@ -1,13 +1,13 @@
 # Running Dolphin in the background, and muting it
 
-Research and tests from 2026-10-08, on belphy (RTX 5080, driver 580, GNOME/mutter on
+Research and tests from 2026-10-08, on the dev box (RTX 5080, driver 580, GNOME/mutter on
 Xorg, PipeWire 1.0.5) and Slippi Playback **3.5.2**. That build is Ishiiruka `slippi`
 at `bffe989d0`.
 
 The goal is to get Dolphin off the user's screen, stop it stealing focus or input, and
 keep it quiet locally without losing audio the dump or OBS needs. It covers recording
-(clipper, jungle_media, Lunar Studio, replay_archiver, melee_skins) and live OBS
-mirrors (MST).
+(clipper, the VOD recorder, one consumer, the archiver, the skins tool) and live OBS
+mirrors (the stream tool).
 
 **Implementation status:** everything below, including window parking, is built on branch
 `background-options` (see "What the runner offers"). Each claim carries a tag:
@@ -32,7 +32,7 @@ mirrors (MST).
 | Optional `[Core] EmulationSpeed = 0` | Output is identical [measured], but it **only helps when the encoder isn't the bottleneck**. See "Speed and codec". |
 | Codec, which is the real speed lever | FFV1 is single-threaded: 0.77× at native, **0.10× at EFB 6**. `DumpCodec=utvideo` is about bit-exact and 0.81× at EFB 6. See "Speed and codec". |
 
-**MST mirror in the background:**
+**the stream tool mirror in the background:**
 
 | Setting | Why |
 |---|---|
@@ -109,7 +109,7 @@ Live-mirror tests used `parecord` on sink monitors. [measured]
 - **Muting the stream or app** (`set-sink-input-mute`, or volume 0) zeroes the monitor, so
   OBS goes silent.
 - **Muting the sink** (`set-sink-mute gameN`, or sink volume 0) **also zeroes the monitor on
-  this rig.** pipewire-pulse null sinks, and the rig's own `50-kotj-buses.conf`, set
+  this rig.** pipewire-pulse null sinks, and the rig's own `50-a bracket tool-buses.conf`, set
   `monitor.channel-volumes=true`. Never mute `gameN`.
 - **The loopback pattern works.** Loop `A.monitor` to headphones, then mute the loopback's
   sink-input: the headphones go silent and `A.monitor` is untouched.
@@ -117,7 +117,7 @@ Live-mirror tests used `parecord` on sink monitors. [measured]
   - The exact string is `No audio output`.
   - **An unknown backend string also silently falls back to null.** A typo mutes too,
     with no visible warning.
-- **ALSA ignores `PULSE_SINK`** and goes to the default sink: on belphy, the user's headset.
+- **ALSA ignores `PULSE_SINK`** and goes to the default sink: on the dev box, the user's headset.
   `PIPEWIRE_NODE=<sink>` does route ALSA.
 - **Two Dolphins on two sinks** stay separate.
 - **WirePlumber keys volume, mute and target by `application.name`, and every Pulse Dolphin is
@@ -159,7 +159,7 @@ Xvfb with no WM, plus i3 as a stand-in WM. Openbox is not installed here. [measu
   - A 1920x1080 output-tied monitor on a larger framebuffer pulls every tile to `+0+0`.
   - Monitors with output `none` are ignored.
 
-  The Jungle box's `xrandr --setmonitor jungle-virtual …` must be checked (read-only, after an
+  The event box's `xrandr --setmonitor <name> …` must be checked (read-only, after an
   event) before anyone tries tiles there.
 - **Window class** is `"AppRun.wrapped","Apprun"`.
   - Render window title: `Dolphin`.
@@ -207,19 +207,19 @@ final made from FFV1. [measured]
   (939x528 is odd). EFB 6 (2816x1584) is fine.
 - `DumpFormat` also sets the file extension. Leave it `avi`.
 
-**EFB 6 (3×, 2816x1584)**: jungle_media's resolution. Its final is lanczos to 1080p, x264 crf 14.
+**EFB 6 (3×, 2816x1584)**: The VOD recorder's resolution. Its final is lanczos to 1080p, x264 crf 14.
 
 | Dump | Realtime | Size per game | Dump vs FFV1 | Final vs final-from-FFV1 |
 |---|---|---|---|---|
 | FFV1 | **0.10×** (12 min/game) | 16.2 GB | ref | ref |
 | `DumpCodec=utvideo`, `UseFFV1=False` | 0.81× | 11.9 GB | **bit-exact** (after 4:2:0) | 44.1 dB (within 0.07 dB of FFV1's own final) |
-| mpeg4 60 Mb/s (**jungle_media today**: its template has `UseFFV1=False`, `BitrateKbps=60000`) | 0.93× | 563 MB | 41.9 dB; worst 34.8 | 41.9 dB; **visible blocking on fast frames** |
+| mpeg4 60 Mb/s (**the VOD recorder today**: its template has `UseFFV1=False`, `BitrateKbps=60000`) | 0.93× | 563 MB | 41.9 dB; worst 34.8 | 41.9 dB; **visible blocking on fast frames** |
 | mpeg4 200 Mb/s and above | 0.74× | 1.3 GB (**caps at about 141 Mb/s**) | 46.0 dB | 43.4 dB |
 | `DumpCodec=h264` | 0.71×, 13.5 cores | | | **drops the last ~52 frames** (lookahead not flushed at SIGTERM). Never use it. |
 
 - Three in parallel: FFV1 0.32× aggregate, utvideo 2.07×, mpeg4 2.13×. No stalls in any run.
 
-**EFB 2 (native, 939x528)**: lm-clipper's default. Its real profile has `UseFFV1=True`, and its
+**EFB 2 (native, 939x528)**: The clip tool's default. Its real profile has `UseFFV1=True`, and its
 final is x264 at 50 Mb/s.
 
 | Dump | Realtime | Final vs final-from-FFV1 |
@@ -228,8 +228,8 @@ final is x264 at 50 Mb/s.
 | mpeg4, any bitrate | 3.0–3.6× (with speed 0) | **−6 dB**, mild softening. Caps at about 37 Mb/s. |
 | utvideo / h264 | fail: odd width | |
 
-**EFB 4 (2×, 1878x1056) and native, from Lunar's rig** — RTX 3060, Linux/X11, 60 s of
-footage, `emulationSpeed 0`. [measured 2026-10-10, reported by the Lunar consumer after
+**EFB 4 (2×, 1878x1056) and native, from a consumer's rig** — RTX 3060, Linux/X11, 60 s of
+footage, `emulationSpeed 0`. [measured 2026-10-10, reported by the a consumer consumer after
 migrating both its apps; not reproduced here]
 
 | Dump | Realtime | Size | vs FFV1 |
@@ -244,7 +244,7 @@ This settles the "utvideo at EFB 4 is unmeasured" caveat: it works (1878 is even
 the clear choice there. Note the native FFV1 figure (0.95×) is higher than the 0.77×
 measured here on a 5080 — the encoder is CPU-bound, so it tracks the CPU, not the GPU.
 
-**Dumps are NOT frame-count stable across codec and speed.** [measured 2026-10-10, Lunar]
+**Dumps are NOT frame-count stable across codec and speed.** [measured 2026-10-10, a consumer]
 The same frame range produced 3504–3534 frames of an expected 3600 depending on codec and
 `emulationSpeed`, and utvideo-vs-FFV1 differed on isolated single frames where Dolphin
 dumped a different frame — not an encoder difference. The "dumps are deterministic"
@@ -252,9 +252,9 @@ assumption under which the quality tables above were frame-aligned holds **withi
 configuration, not across them. A consumer byte-comparing two runs must hold codec and
 speed fixed; a duration guard with a ratio (not an exact frame count) is the right check.
 
-**EFB 3 (1.5×, 1408x792), from melee_skins' rig** — RTX 5080 + i9-12900K, xvfb-run, OGL,
+**EFB 3 (1.5×, 1408x792), from the skins tool' rig** — RTX 5080 + i9-12900K, xvfb-run, OGL,
 1800 frames, two runs each within 1%. Speed = frames/sec ÷ 60, first frame to last.
-[measured 2026-10-10, reported by the melee_skins consumer; not reproduced here]
+[measured 2026-10-10, reported by the the skins tool consumer; not reproduced here]
 
 | Dump | speed 1 | speed 0 | notes |
 |---|---|---|---|
@@ -271,24 +271,24 @@ framemd5) for all three codecs.
 3.8 s → 1.1 s (EFB 3, start frame 0), and a 20-frame dump went 6.0 s → 3.6 s total on FFV1.
 So the rule "speed 0 only helps when the encoder is not the bottleneck" is about THROUGHPUT;
 boot is a flat win, and it dominates short dumps — stills, desync checks, stage shots.
-[measured 2026-10-10, melee_skins]
+[measured 2026-10-10, the skins tool]
 
 **"utvideo is bit-exact to FFV1 after 4:2:0" holds only if you do not SCALE first.**
-[measured 2026-10-10, melee_skins] FFV1 dumps are bgra, so a consumer that upscales before
+[measured 2026-10-10, the skins tool] FFV1 dumps are bgra, so a consumer that upscales before
 encoding (1408 → 1920 for x264 yuv420p) subsamples chroma *after* scaling, while utvideo was
 already subsampled at the dump size. The two finals differ by ~44 dB PSNR — not visible at
 2× zoom, but not identical. If your pipeline scales, "bit-exact" describes the dump, not
 your output.
 
 **Recommendations:**
-- **Archival VOD (jungle_media): `DumpCodec=utvideo`.** It is about 8× faster than FFV1,
+- **Archival VOD (the VOD recorder): `DumpCodec=utvideo`.** It is about 8× faster than FFV1,
   near-identical in quality, and clearly better than today's mpeg4 60M. Budget about 12 GB of
   temporary disk per game per worker, and delete the dump after the mux. If disk is tight,
   use mpeg4 at `BitrateKbps≥150000`, never 60000.
 - **Clips at native: keep FFV1.** mpeg4 at native is a preview-quality fast mode only.
   utvideo at EFB 4 (2×, even width) should work, but is unmeasured.
 - **Do not use FFV1 at EFB ≥ 4 for batches.**
-- **Gotcha 5 ("preserve UseFFV1") assumed every consumer used FFV1.** jungle_media does
+- **Gotcha 5 ("preserve UseFFV1") assumed every consumer used FFV1.** The VOD recorder does
   not. The runner needs a `dumpCodec` option, so the choice is the consumer's.
 
 - `EmulationSpeed=0` gives **bit-identical** video and audio, with the same durations,
@@ -310,8 +310,8 @@ your output.
   | 7 | 4× |
   | 8 | 5× and so on |
 
-  - jungle_media's 6 is 3×.
-  - **MST's `spectate_efb_scale: 3` is 1.5× (about 1408x792), not the "1920x1584" its comment
+  - The VOD recorder's 6 is 3×.
+  - **the stream tool's `spectate_efb_scale: 3` is 1.5× (about 1408x792), not the "1920x1584" its comment
     claims.** The ~4-feeds load-test ceiling was measured at that setting.
   - The real GFX.ini also carries a second `EFBScale = 7` under `[Hacks]`. Dolphin reads
     `[Settings]`, as the dump sizes confirm.
@@ -322,14 +322,14 @@ your output.
 
 | Consumer | Today | Adopt | Don't |
 |---|---|---|---|
-| **jungle_media** (runner, VOD batches) | Template is ALSA (audible), `Fullscreen=True`; 500 ms xdotool parker by pid; pids from `pgrep -f`; EFB 6 FFV1 | Null audio, `PauseOnFocusLost=False`, small window, pre-map pid parker (use `onSpawn`) | Speed 0 alongside `VOD_WORKERS` without measuring CPU; its duration guard checks only the **minimum** |
-| **Lunar Studio** (vendored runner) | Already speed 0, 640x360, VSync off | Null audio; re-vendor for `onSpawn`; throttle `onProgress` (at speed 0 it fires hundreds of times per second) | |
-| **lm-clipper** (Electron, Win/mac/Linux; not on the runner) | Inherits ALSA and fullscreen from the real profile; its "Fullscreen" option only toggles `-b`; a new focus steal per clip | Migrate to `record()` first (fixes substring end-frame and unbounded stderr). Then "Show Dolphin while recording" (off = background) and "Mute recordings" | X11 placement on Windows/mac/Wayland must be a quiet no-op. Never background `playClipAsync` (the user is watching). |
-| **melee_skins** (runner under xvfb-run) | Plays ALSA audio to the **user's headset** | Null audio | Placement is pointless on Xvfb |
-| **replay_archiver** | Mutates the real profile, no `--user`, substring end-frame | Migrate to `record()` first | |
+| **the VOD recorder** (runner, VOD batches) | Template is ALSA (audible), `Fullscreen=True`; 500 ms xdotool parker by pid; pids from `pgrep -f`; EFB 6 FFV1 | Null audio, `PauseOnFocusLost=False`, small window, pre-map pid parker (use `onSpawn`) | Speed 0 alongside `VOD_WORKERS` without measuring CPU; its duration guard checks only the **minimum** |
+| **one consumer** (vendored runner) | Already speed 0, 640x360, VSync off | Null audio; re-vendor for `onSpawn`; throttle `onProgress` (at speed 0 it fires hundreds of times per second) | |
+| **the clip tool** (Electron, Win/mac/Linux; not on the runner) | Inherits ALSA and fullscreen from the real profile; its "Fullscreen" option only toggles `-b`; a new focus steal per clip | Migrate to `record()` first (fixes substring end-frame and unbounded stderr). Then "Show Dolphin while recording" (off = background) and "Mute recordings" | X11 placement on Windows/mac/Wayland must be a quiet no-op. Never background `playClipAsync` (the user is watching). |
+| **the skins tool** (runner under xvfb-run) | Plays ALSA audio to the **user's headset** | Null audio | Placement is pointless on Xvfb |
+| **the archiver** | Mutates the real profile, no `--user`, substring end-frame | Migrate to `record()` first | |
 | **frame_grabber** (Python) | Parker grabs **any** Slippi/Dolphin window; the real profile is shared by 2 workers | Pid-scoped parking, per-worker `--user` | **Speed 0 breaks it**: camera writes are locked to `[CURRENT_FRAME]` |
 | **slp2mp4** | `RenderToMain=True`, ALSA, applies volume in ffmpeg | Null audio is its mute | `RenderWindow*` keys don't apply under `RenderToMain` |
-| **MST** | Title-based parker (`slippi.rs:92-280`) grabs **every** "dolphin/playback/slippi/faster melee" window and resizes it to 1080p, including other projects' recordings and, on the Jungle box, monkeys' netplay windows | Park by pid (the CLI's `started` event carries it); per-feed `application.name`; detach hotkeys | Null audio or volume tricks (OBS needs the stream); speed 0; minimise |
+| **the stream tool** | Title-based parker grabs **every** "dolphin/playback/slippi/faster melee" window and resizes it to 1080p, including other projects' recordings and, on the event box, another user's netplay windows | Park by pid (the CLI's `started` event carries it); per-feed `application.name`; detach hotkeys | Null audio or volume tricks (OBS needs the stream); speed 0; minimise |
 
 **Rule: exactly one owner per window, by pid.** Title and class matching grabs other
 projects' Dolphins. Four projects reimplemented parking, and two of them do it that way.
@@ -369,7 +369,7 @@ out mute and speed: mute breaks OBS, and speed breaks frame_grabber and mirrors.
 - `env`, applied *before* the capture variables, so it can't clobber them.
 
 **Defaults that changed:**
-- obsMirror `emulationSpeed` **0 → 1**. MST always passed 1.
+- obsMirror `emulationSpeed` **0 → 1**. The stream tool always passed 1.
 - obsMirror profile always sets `PauseOnFocusLost=False`.
 - Record mode forces `PauseOnFocusLost=False`.
 
@@ -404,7 +404,7 @@ recordings + 1 mirror):
 - **First version's bug:** it wrote `_NET_WM_DESKTOP` onto mapped windows, read its own
   write back, and reported "placed" while the windows stayed on screen. Fixed, and pinned by
   a test ("NEVER TRUST A PROPERTY YOU WROTE").
-- **Untested:** Openbox (the Jungle box), KDE, and XWayland under a Wayland session.
+- **Untested:** Openbox (the event box), KDE, and XWayland under a Wayland session.
 
 **Seen once, unexplained:** two boot hangs (no frame in 90 s) during branch smoke runs at
 00:08 and 00:10 on 2026-10-09. They happened while another session was reworking the audio
@@ -435,20 +435,20 @@ Items 1–8, 10, 11 and 12 are fixed on the branch. Item 9 is now documented.
 12. README and CLAUDE.md said "unconsumed".
 
 Still open, outside the runner:
-- MST's title-based parker.
-- MST `spectate_efb_scale: 3` is 1.5×.
-- jungle_media records mpeg4 60M (consider utvideo).
-- lm-clipper's "Fullscreen" label.
+- The stream tool's title-based parker.
+- The stream tool `spectate_efb_scale: 3` is 1.5×.
+- The VOD recorder records mpeg4 60M (consider utvideo).
+- The clip tool's "Fullscreen" label.
 - frame_grabber's parker.
-- Lunar's stale vendored copy.
+- a consumer's stale vendored copy.
 
 ---
 
 ## Still untested
 
-- Openbox: rules, `focusNew`, and whether MST's `query_tree` parker even sees reparented
+- Openbox: rules, `focusNew`, and whether the stream tool's `query_tree` parker even sees reparented
   windows.
-- The Jungle box's `jungle-virtual` monitor definition (read-only check, not during event
+- The event box's virtual-monitor definition (read-only check, not during event
   week).
 - A mirror-mode comm on a **growing** .slp while parked.
 - `focus-new-windows 'strict'` on GNOME.

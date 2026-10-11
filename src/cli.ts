@@ -2,7 +2,7 @@
 /**
  * `dolphin-runner` — the process boundary for consumers that are not Node.
  *
- * MST is Rust/Tauri; it cannot import this package, so it spawns this and
+ * The stream tool is Rust/Tauri; it cannot import this package, so it spawns this and
  * treats the child's lifetime as the feed's lifetime. Every subcommand:
  *   - prints ONE JSON line per event to stdout (`{"event":"started",...}`),
  *   - stays in the foreground until the Dolphin exits,
@@ -255,7 +255,7 @@ async function recordCmd(argv: string[]) {
 
   // The CLI builds the profile too: a consumer that can only shell out would
   // otherwise need a Node shim just to call buildProfile, which is exactly the
-  // shim melee_skins had to write.
+  // shim the skins tool had to write.
   await buildProfile(v["user-dir"]!, {
     mode: "record",
     dolphinPath: paths.dolphinPath,

@@ -339,7 +339,7 @@ test("copyFromProfile carries arbitrary assets and replaces the SRAM default", a
   assert.ok(!fs.existsSync(path.join(userDir, "GC", "SRAM.raw")), "the caller's list replaces the default");
 });
 
-// --- reported by Lunar after migrating both its apps, 2026-10-10 -------------
+// --- reported by a consumer after migrating both its apps, 2026-10-10 -------------
 
 test("REGRESSION: two packs whose folders share a name do not replace each other", async () => {
   // `GALE01` is a common pack folder name, so this collided in practice.

@@ -5,7 +5,7 @@ without hangs, leaked processes, or touching the user's real Dolphin profile.
 
 Zero runtime dependencies. Node ESM + TypeScript. No Electron, no slippi-js.
 
-> **Status:** used by jungle_media's VOD recorder, melee_skins, and MST's
+> **Status:** used by two VOD recorders, a clip tool, a skins tool, an archiver, and a stream tool's
 > flag-guarded `obs-mirror` path. Windows is unverified at runtime — see CLAUDE.md.
 > Running hidden / muted, and the codec speed trade-off: [docs/background-and-mute.md](docs/background-and-mute.md).
 
@@ -345,21 +345,21 @@ dolphin-runner obs-mirror \
 
 `--fresh-profile` builds the `--user` dir from empty inis (only the keys above,
 Dolphin defaults for the rest) instead of copying the real Playback profile —
-the way MST's own launch always worked. `--no-capture` runs the same Dolphin
+the way the stream tool's own launch always worked. `--no-capture` runs the same Dolphin
 with no capture hook (`OBS_VKCAPTURE=0`, no `LD_PRELOAD`).
 
-### Building the CLI (what MST runs)
+### Building the CLI (what a non-Node consumer runs)
 
 ```sh
-cd ~/Projects/dolphin_runner && npm ci && npm run build   # → dist/cli.js
+npm ci && npm run build   # → dist/cli.js
 node dist/cli.js --help
 ```
 
-MST (jungle `apps/mst`) uses this for its mirror feeds only when
-`MST_DOLPHIN_RUNNER=1` (or `useDolphinRunner: true` in its config). It runs
-`$DOLPHIN_RUNNER` if set (a command, or a path to `cli.js`), else
-`~/Projects/dolphin_runner/dist/cli.js` via `node`. MST keeps the comm-file
-follow; this process owns the profile, the config and the capture env.
+A Rust/Tauri stream tool drives its mirror feeds this way, behind a flag of its
+own while it cuts over. The pattern there is worth copying: resolve the CLI from
+an env var (a command, or a path to `cli.js`) with a checked-in default, and let
+the caller keep its comm-file follow — this process owns the profile, the config
+and the capture env, and nothing else.
 
 Stays in the foreground; one JSON line per event on stdout
 (`started` / `warning` / `placed` / `stopping` / `exited` / `error`); SIGTERM to it kills the whole
