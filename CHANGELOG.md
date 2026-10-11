@@ -134,7 +134,8 @@ stopped at the end frame, no dump written, no leaked processes.
 
 Closing the gaps between what the package offered and what its five consumers
 actually do. Every item here replaces a workaround somebody was already
-carrying; `MIGRATING.md` §8 names which project and which lines to delete.
+carrying; the per-project notes (which project, which lines to delete) are kept
+outside this repo.
 
 **Added**
 
