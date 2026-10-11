@@ -97,6 +97,9 @@ async function obsMirrorCmd(argv: string[]) {
       "app-name": { type: "string" },
       workspace: { type: "string" },
       "placement-required": { type: "boolean", default: false },
+      undecorate: { type: "boolean", default: false },
+      geometry: { type: "string" },
+      monitor: { type: "string" },
     },
   });
 
@@ -124,6 +127,10 @@ async function obsMirrorCmd(argv: string[]) {
 
   const workspace = num(v.workspace, "workspace");
   if (v["placement-required"] && workspace == null) throw new Error("--placement-required needs --workspace");
+  const geometry = parseGeometry(v.geometry);
+  if ((geometry || v.undecorate || v.monitor) && workspace == null) {
+    throw new Error("--geometry/--undecorate/--monitor need --workspace (placement is what applies them)");
+  }
 
   const ac = new AbortController();
   const handle = await obsMirror(
@@ -152,7 +159,16 @@ async function obsMirrorCmd(argv: string[]) {
       capture: !v["no-capture"],
       detachHotkeys: v["detach-hotkeys"],
       appName: v["app-name"],
-      placement: workspace != null ? { workspace, required: v["placement-required"] } : undefined,
+      placement:
+        workspace != null
+          ? {
+              workspace,
+              required: v["placement-required"],
+              ...(geometry ? { geometry } : {}),
+              ...(v.undecorate ? { undecorate: true } : {}),
+              ...(v.monitor ? { monitor: v.monitor } : {}),
+            }
+          : undefined,
       onWarning: (w) => emit({ event: "warning", ...w }),
       signal: ac.signal,
     },

@@ -300,13 +300,12 @@ Those prompts are written: `docs/handoff-prompts.md` (one per project, in
 migration order, each with its own codec/speed advice and caveats).
 `MIGRATING.md` §8 holds the per-project notes; keep it current as each lands.
 
-Status as of 2026-10-10. **Done:** Lunar `apps/media` (dc5711c) and
-`apps/clipper` (775c5d8), and melee_skins — all verified byte-identical
-against their old paths. `~/Projects/lm-clipper` is a stale checkout, ignore
-it. **Still to go:** jungle `apps/media`, jungle `apps/mst` (on the
-`obs-mirror` CLI but behind a flag, old path still live), and
-`replay_archiver` (which still runs with no `--user` at all). kotj does not
-spawn Dolphin.
+Status as of 2026-10-11. **Done:** Lunar `apps/media` (dc5711c) and
+`apps/clipper` (775c5d8), melee_skins, jungle `apps/media`, and
+`replay_archiver`. `~/Projects/lm-clipper` is a stale checkout, ignore it.
+**Only one left: jungle `apps/mst`** — it is on the `obs-mirror` CLI but
+behind `MST_DOLPHIN_RUNNER`, defaulting OFF, with the legacy launch still the
+path every event has run on. kotj does not spawn Dolphin.
 
 Consumers report measurements back; fold them into
 `docs/background-and-mute.md` with the rig and who measured them. The encoder
@@ -315,9 +314,9 @@ from consumers rather than this box.
 
 1. ~~Lunar — both apps.~~ **Done 2026-10-10.**
 2. ~~melee_skins.~~ **Done 2026-10-10** (kept its `rec.mjs` shim on purpose).
-3. `jungle_media` — the main event. It keeps its ffmpeg mux, duration guard,
-   workspace parking and upload; only the spawn is replaced. Note it currently
-   uses a persistent `data/dolphin-user`; moving to throwaway profiles is the
-   upgrade, but keep `userDir` as the escape hatch.
-4. `replay_archiver`, then MST's mirror (`obsMirror` / the CLI).
-5. `slp2mp4` is Python — keep it aligned via this file, not code.
+3. ~~jungle `apps/media`.~~ **Done 2026-10-11.**
+4. ~~`replay_archiver`.~~ **Done 2026-10-11.**
+5. jungle `apps/mst` — the last one. Flip `MST_DOLPHIN_RUNNER` on by default
+   and delete the title-matching parker; the window shaping it was waiting for
+   works on `obs-mirror` as of 0.5.4.
+6. `slp2mp4` is Python — keep it aligned via this file, not code.

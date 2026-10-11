@@ -233,6 +233,21 @@ endFrame })`; it resolves when the end frame is reached. `--cout` is kept, so
 the end is detected by the numeric frame rule rather than their 1-second
 no-frame timer.
 
+### jungle `apps/media` — ADOPTED 2026-10-11
+
+Real dependency at `#v0.5.3` (was a loose `DOLPHIN_RUNNER_DIR` checkout, which
+meant a `npm run build` upstream changed how it recorded). Its own parking
+loop and `dolphinLegacy.js` are gone, and it added a `RUNNER_VERSION` startup
+check so a `node_modules` that isn't the pinned version refuses to record —
+worth copying.
+
+### replay_archiver — ADOPTED 2026-10-11
+
+Pinned `#v0.5.3`, imports `buildProfile`/`record`/`healRealProfile`, uses
+`commPath` per replay. The substring end-frame match is gone. It runs
+`healRealProfile()` and logs it, to undo the damage from years of recording
+on the operator's real profile.
+
 ### Lunar `apps/media` — ADOPTED 2026-10-10 (commit dc5711c)
 
 Done. The vendored fork is deleted, `scanLastFrame`/`withLastFrame` and the

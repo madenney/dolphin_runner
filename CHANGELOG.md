@@ -6,6 +6,26 @@ failure mode this package exists to prevent.
 
 Until 1.0 the minor is the breaking digit: `0.x.0` may break, `0.x.y` never does.
 
+## 0.5.4 — 2026-10-11
+
+**Fixed**
+
+- **`obs-mirror` did not accept `--undecorate`, `--geometry` or `--monitor`.**
+  They were added to `record` and `play` in 0.5.0 and missed on `obs-mirror` —
+  the one subcommand the window-shaping work existed for, since MST needs an
+  undecorated 1080p surface on a landscape output and its primary is a rotated
+  portrait panel. The CLI exited with `Unknown option`, so the documented
+  recipe in the handoff prompt could not work. Caught by MST's own test, which
+  had pinned the broken behaviour as expected (2026-10-11).
+
+  Verified against a real Dolphin after the fix: `obs-mirror … --workspace 0
+  --undecorate --geometry 1920x1080 --monitor landscape` produced a
+  **1920x1080** render surface and reported `placed`.
+
+  `test/cli-flags.test.ts` now asserts every subcommand that can park a window
+  also accepts the flags that shape it, and that the shaping flags are refused
+  rather than ignored without `--workspace`.
+
 ## 0.5.3 — 2026-10-10
 
 Documentation only — no code changed. Tagged so consumers pinning a version
