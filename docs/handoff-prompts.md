@@ -1,7 +1,7 @@
 # Handoff prompts
 
 One per consuming project, to paste into that project's own Claude session.
-Written 2026-10-10 against `slippi-dolphin-runner` **v0.5.3**.
+Written 2026-10-10 against `slippi-dolphin-runner` **v0.5.4**.
 
 The migrations are the deliverable; the package is not. Do them in this order
 (lowest risk first), and do not edit these projects from the dolphin_runner
@@ -26,7 +26,7 @@ and `CHANGELOG.md` in `~/Projects/dolphin_runner`.
   replays were available. Matters for MST.
 - **Bumping a pin needs an explicit install.** Editing the tag in
   `package.json` and running `npm install` keeps the OLD commit — reproduced
-  2026-10-10. Use `npm install "github:madenney/dolphin_runner#v0.5.3"` and
+  2026-10-10. Use `npm install "github:madenney/dolphin_runner#v0.5.4"` and
   check `node -p "require('./node_modules/slippi-dolphin-runner/package.json').version"`.
   Otherwise a byte-identical verification can pass without the upgrade ever
   happening.
@@ -99,7 +99,7 @@ _Both apps migrated and verified byte-identical (`apps/media` dc5711c,
 
 > You're working in `~/Projects/lunar`. **Two** apps here spawn Slippi Playback
 > Dolphin, and both should end up on `slippi-dolphin-runner`
-> (`madenney/dolphin_runner`, pin **`#v0.5.3`**):
+> (`madenney/dolphin_runner`, pin **`#v0.5.4`**):
 >
 > - **`apps/media`** (`lunar_media`) — already uses the package, but through a
 >   **vendored copy** that has drifted.
@@ -272,16 +272,18 @@ _Both apps migrated and verified byte-identical (`apps/media` dc5711c,
 
 </details>
 
-## 2. jungle — the whole repo (`apps/media` **and** `apps/mst`)
+## 2. jungle — `apps/mst` only (`apps/media` is done)
 
 > You're working in `~/Projects/jungle`. Two apps here drive Slippi Playback
 > Dolphin and both should end up fully on `slippi-dolphin-runner`
-> (`madenney/dolphin_runner`, pin **`#v0.5.3`**):
+> (`madenney/dolphin_runner`, pin **`#v0.5.4`**):
 >
-> - **`apps/media`** — the VOD recorder. Already uses the package, but loads it
->   from a loose checkout and still hand-rolls a lot it now owns.
+> - **`apps/media`** — **DONE 2026-10-11.** Real dependency, own parking loop
+>   and `dolphinLegacy.js` deleted, plus a `RUNNER_VERSION` startup check.
+>   Nothing to do.
 > - **`apps/mst`** — the stream tool (Rust/Tauri). Already shells out to the
->   CLI, but only behind a flag, with the legacy path still live.
+>   CLI, but only behind a flag, with the legacy path still live. **This is
+>   the task.**
 >
 > `apps/kotj` does **not** spawn Dolphin — its `dolphins_up` is a status field
 > relayed from the machine agent. Nothing to do there; don't go looking.
@@ -303,7 +305,7 @@ _Both apps migrated and verified byte-identical (`apps/media` dc5711c,
 > First, a hazard: `src/lib/render/dolphinRunner.js:40` loads `dist/index.js`
 > in preference to `src/`, and `dist/` is a gitignored build artifact. **A
 > `npm run build` in the dolphin_runner checkout silently changes this app's
-> behaviour.** Point it at a pinned checkout or a real dependency (**v0.5.3**).
+> behaviour.** Point it at a pinned checkout or a real dependency (**v0.5.4**).
 >
 > Delete and replace:
 > - your `xdotool` parking loop (`dolphinShared.js:75`) → `placement: { workspace }`.
@@ -354,6 +356,13 @@ _Both apps migrated and verified byte-identical (`apps/media` dc5711c,
 > already spawns `dolphin-runner obs-mirror` but only behind a flag. Read
 > `MIGRATING.md` §8 in `~/Projects/dolphin_runner` for the MST section.
 >
+> **Pin v0.5.4 or later.** The window-shaping flags were missing from
+> `obs-mirror` until then — your own test had pinned that as expected
+> behaviour ("still rejects these"). They work now, verified against a real
+> Dolphin: `--workspace 0 --undecorate --geometry 1920x1080 --monitor
+> landscape` gave a 1920x1080 render surface and reported `placed`. Flip that
+> test around.
+>
 > The thing that was blocking full adoption is now fixed. Your parker exists
 > because you must strip decorations and moveresize onto a landscape output
 > (your primary is a rotated portrait panel), which the profile's `window`
@@ -394,10 +403,10 @@ _Both apps migrated and verified byte-identical (`apps/media` dc5711c,
 > upstream** — only finished replays were available. That's your live case, so
 > test it deliberately and report back.
 
-## 3. replay_archiver
+## 3. replay_archiver ✅ DONE 2026-10-11 — nothing to send
 
 > You're working in `~/Projects/replay_archiver`. Migrate its Dolphin launching
-> onto `slippi-dolphin-runner` (`madenney/dolphin_runner`, pin **`#v0.5.3`**).
+> onto `slippi-dolphin-runner` (`madenney/dolphin_runner`, pin **`#v0.5.4`**).
 > It's Node ESM, so import it directly. Read `MIGRATING.md` in that repo — §2
 > is the checklist, §8 has a replay_archiver section.
 >
@@ -449,7 +458,7 @@ _Both apps migrated and verified byte-identical (`apps/media` dc5711c,
 >
 > Two things to do, plus one to consider.
 >
-> **1. Bump the pin.** `package.json` is on `#v0.4.0`; current is **`#v0.5.3`**.
+> **1. Bump the pin.** `package.json` is on `#v0.4.0`; current is **`#v0.5.4`**.
 > Nothing between those is a breaking change (see `CHANGELOG.md` — 0.4.0 was
 > the breaking one), but record mode now pins `DumpFormat = avi` /
 > `DumpFramesAsImages = False` and writes `EFBScale` under `[Hacks]` as well as
