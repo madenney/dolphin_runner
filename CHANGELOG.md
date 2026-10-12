@@ -6,6 +6,33 @@ failure mode this package exists to prevent.
 
 Until 1.0 the minor is the breaking digit: `0.x.0` may break, `0.x.y` never does.
 
+## 0.5.5 — 2026-10-11
+
+No code changed — `src/` behaviour, the CLI contract and the API are identical
+to 0.5.4. Tagged because `docs/` and the doc comments ship in the package, and
+until this tag every published version carried things a public repo should not:
+
+- A tracked `undefined/play/user/Config/` — a verbatim copy of a real Dolphin
+  profile, committed by a broad `git add -A` when a hand-run with an unset env
+  var built a profile under the literal string. It is removed, and `undefined/`
+  is gitignored with a comment naming the mistake.
+- Machine paths in `scripts/smoke.ts`. The ISO and the replay are now required
+  env/argv with a usage message instead of hardcoded paths, so the harness is
+  runnable by anyone rather than only on one box.
+- Per-project migration notes and handoff prompts that mapped private consumer
+  repos by file and line (`MIGRATING.md` §8 and `docs/handoff-prompts.md`).
+  Both now live outside the repo; `MIGRATING.md` keeps §1-§7, which is the part
+  an adopter needs.
+- Hostnames, and the names of the consuming projects, throughout the docs and
+  the code comments. They read as roles now — a VOD recorder, a clip tool, a
+  skins tool, an archiver, a stream tool. The reasoning in those comments was
+  always the point, not whose repo shipped the bug.
+- `files` shipped all of `docs`; it now names the one document meant to be
+  published, so nothing local can escape through a future `.npmignore`.
+
+`test/mst-parity.test.ts` is now `test/stream-tool-parity.test.ts`. Nothing
+imports it, so this affects only someone running a single test file by name.
+
 ## 0.5.4 — 2026-10-11
 
 **Fixed**
