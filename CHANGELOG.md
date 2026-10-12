@@ -6,6 +6,13 @@ failure mode this package exists to prevent.
 
 Until 1.0 the minor is the breaking digit: `0.x.0` may break, `0.x.y` never does.
 
+## 0.5.6 — 2026-10-11
+
+No code changed. Finishes 0.5.5: that pass left two private commit hashes in the
+0.5.2 entry and a garbled phrase in two places. **Pin this instead of 0.5.5** —
+there is no reason to install 0.5.5, which is identical in behaviour and worse
+in content.
+
 ## 0.5.5 — 2026-10-11
 
 No code changed — `src/` behaviour, the CLI contract and the API are identical
@@ -98,9 +105,8 @@ README:
 
 ## 0.5.2 — 2026-10-10
 
-Everything here was reported by the a consumer consumer after migrating both its
-apps (`apps/media` dc5711c, `apps/clipper` 775c5d8), the first project to go
-end to end on this package.
+Everything here was reported by the first consumer to go end to end on this
+package, after migrating both of its apps.
 
 **Added**
 

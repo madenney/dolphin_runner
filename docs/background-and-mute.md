@@ -229,7 +229,7 @@ final is x264 at 50 Mb/s.
 | utvideo / h264 | fail: odd width | |
 
 **EFB 4 (2×, 1878x1056) and native, from a consumer's rig** — RTX 3060, Linux/X11, 60 s of
-footage, `emulationSpeed 0`. [measured 2026-10-10, reported by the a consumer consumer after
+footage, `emulationSpeed 0`. [measured 2026-10-10, reported by a consumer after
 migrating both its apps; not reproduced here]
 
 | Dump | Realtime | Size | vs FFV1 |
