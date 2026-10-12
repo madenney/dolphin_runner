@@ -262,6 +262,33 @@ than a measurement: this consumer's 0.33× is the same configuration as its own
 end-frame stop lands where it should (5154 of 5157 frames, A/V lengths matched,
 picture clean) with the frame count and look unchanged from 0.5.3.
 
+**EFB 4 + utvideo with three Dolphins on one box** — i9-12900K + RTX 5080,
+1080p h264_nvenc output, 709-frame (11.82 s) ranges, two other Dolphin instances
+running throughout. [measured 2026-10-11, reported by a recording service; not
+reproduced here]
+
+| | |
+|---|---|
+| Dump itself | **0.80x** realtime (16.7-19.2 s per clip) |
+| Including boot | ~0.70x (1.9-2.4 s to first frame) |
+| h264_nvenc encode of the result | 3.3 s |
+
+Useful as the *contended* case: 0.80x at EFB 4 with two competing emulators,
+against 1.81x at EFB 4 on an idle RTX 3060 above. Boot is a fixed ~2 s cost, so
+it dominates the ratio on short clips and vanishes on long ones — which is why
+the two figures differ by 0.10x on an 11.82 s range.
+
+**"Dolphin produced no video" can be contention, not configuration.**
+[observed 2026-10-11, a recording service] Three runs failed that way while two
+other Dolphins were running on the same box; later runs in the same session, and
+every run after the bump, succeeded with nothing changed. The error means
+`record()` found no `<base>.avi` after a full run, and gotcha 16 is the usual
+cause (a profile left on another container, or dump keys that were never
+created) — but it is a *symptom*, not a diagnosis. Before chasing the profile,
+check whether the box was simply oversubscribed, and retry. The run that
+produces no AVI produces no diagnostic either, so there is nothing in the
+result to tell the two apart.
+
 **Dumps are NOT frame-count stable across codec and speed.** [measured 2026-10-10, a consumer]
 The same frame range produced 3504–3534 frames of an expected 3600 depending on codec and
 `emulationSpeed`, and utvideo-vs-FFV1 differed on isolated single frames where Dolphin
@@ -270,9 +297,20 @@ assumption under which the quality tables above were frame-aligned holds **withi
 configuration, not across them. A consumer byte-comparing two runs must hold codec and
 speed fixed; a duration guard with a ratio (not an exact frame count) is the right check.
 
-**EFB 3 (1.5×, 1408x792), from the skins tool' rig** — RTX 5080 + i9-12900K, xvfb-run, OGL,
+**They are not byte-stable run to run either, on the SAME version.**
+[measured 2026-10-11, reported by a clip tool and a recording service on the
+v0.5.1 -> v0.5.6 bump; not reproduced here] Comparing a 709-frame range recorded
+repeatedly: pairs of runs on the *same* version differed by 33-40 dB average
+PSNR, with single frames as low as ~17 dB, while one pair *across* the two
+versions came out byte-identical in video. So a byte or PSNR comparison between
+two runs cannot tell a version change from ordinary run-to-run variation, and a
+single byte-identical pair is not evidence that two versions agree. Judge an
+upgrade on length, frame count, resolution and audio length — all four of which
+did hold exactly across the bump here — not on pixels.
+
+**EFB 3 (1.5×, 1408x792), from the skins tool's rig** — RTX 5080 + i9-12900K, xvfb-run, OGL,
 1800 frames, two runs each within 1%. Speed = frames/sec ÷ 60, first frame to last.
-[measured 2026-10-10, reported by the the skins tool consumer; not reproduced here]
+[measured 2026-10-10, reported by the skins tool consumer; not reproduced here]
 
 | Dump | speed 1 | speed 0 | notes |
 |---|---|---|---|

@@ -218,7 +218,10 @@ Each of these cost somebody an event. The comments in the code say so; keep them
     CODEC stays inherited (gotcha 5) — that one is the consumer's choice.
     A profile that has never dumped has none of these keys, so only CREATING
     them works; rewriting existing lines silently gives a window-resolution
-    dump and nothing downstream can tell.
+    dump and nothing downstream can tell. But "produced no video" is a SYMPTOM,
+    not a diagnosis: a consumer hit it three times purely from running three
+    Dolphins on one box (2026-10-11), with the same profile that worked before
+    and after. Rule out contention before rewriting a profile that is fine.
 17. **Consumers must pass `efbScale`.** Omitting it inherits the real profile's
     value, which is whatever the user last played at. The first smoke run
     inherited `EFBScale = 7` and produced a 25 GB lossless AVI at ~4 fps for a
