@@ -39,6 +39,24 @@ npm install "github:madenney/dolphin_runner#v0.5.2"
 node -p "require('./node_modules/slippi-dolphin-runner/package.json').version"
 ```
 
+**That install rewrites your lockfile's transport, and may touch unrelated
+lines.** Reported 2026-10-11 by a consumer on the v0.5.6 bump: `npm install
+"github:…"` rewrote the dependency's `resolved` URL from `git+https://` to
+`git+ssh://`, and dropped `"peer": true` markers from unrelated packages. It is
+not a one-off — of six lockfiles checked the same day, five had been rewritten
+to `git+ssh://` and only the one that fixed it by hand still had `git+https://`. The
+transport matters — `git+ssh://` needs an SSH key, so a lockfile carrying it
+fails `npm ci` on any machine or CI runner without one, while `git+https://`
+works for a public repo with no credentials at all. Check the diff after the
+install and keep `git+https://` by hand if that is what you had:
+
+```sh
+git diff -- package-lock.json     # expect the version/SHA to move, nothing else
+```
+
+This is npm's behaviour, not something this package controls, which is why it
+is a review step rather than a fix.
+
 **The `allow-scripts` warning on install is harmless.** Newer npm prints
 `slippi-dolphin-runner@x (prepare: npm run build)` and tells you to approve
 scripts. You do not need to: `dist/` is **not** committed, but npm runs

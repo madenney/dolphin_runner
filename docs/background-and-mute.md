@@ -244,6 +244,24 @@ This settles the "utvideo at EFB 4 is unmeasured" caveat: it works (1878 is even
 the clear choice there. Note the native FFV1 figure (0.95×) is higher than the 0.77×
 measured here on a 5080 — the encoder is CPU-bound, so it tracks the CPU, not the GPU.
 
+**The software-GL path costs about 40%, and the encoder tracks system load, not
+the GPU.** [measured 2026-10-11, reported by a VOD recorder consumer on the
+v0.5.3 → v0.5.6 bump; not reproduced here] One 85.9 s game at EFB 6, utvideo,
+16:9, null audio backend, on an i9-12900K:
+
+| Where | Realtime |
+|---|---|
+| Xorg, discrete GPU | **0.96×** |
+| Xvfb, software GL, box otherwise idle | ~0.6× |
+| Xvfb, software GL, box under load ~13 | 0.33× |
+
+Same build, same settings, same replay — so the spread is the renderer and the
+competition for CPU, not the dump. Treat a loaded-box figure as a floor rather
+than a measurement: this consumer's 0.33× is the same configuration as its own
+0.6×. It also confirms utvideo at EFB 6 on a second rig, and that `record()`'s
+end-frame stop lands where it should (5154 of 5157 frames, A/V lengths matched,
+picture clean) with the frame count and look unchanged from 0.5.3.
+
 **Dumps are NOT frame-count stable across codec and speed.** [measured 2026-10-10, a consumer]
 The same frame range produced 3504–3534 frames of an expected 3600 depending on codec and
 `emulationSpeed`, and utvideo-vs-FFV1 differed on isolated single frames where Dolphin

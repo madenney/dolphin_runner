@@ -300,9 +300,13 @@ That is done: the prompts were written and handed over on 2026-10-11.
 
 Where it landed, as of 2026-10-11: five of the six consumers import or shell out
 to this package, pinned to a tag, with their copy-pasted launchers deleted. The
-sixth (the stream tool) has the prompt and is the only one still running its own
-launch. A bracket tool in the same family never spawned Dolphin, and a Python
-converter is kept aligned through this file rather than through code.
+sixth (the stream tool) has its cut-over on a branch and is pinned there, but the
+machine that runs its live events is still on the older pin and the legacy launch
+until that branch merges after the next event. Its CLI side is proven — 165 tests
+pass and `obs-mirror` takes its full argument list plus `--workspace`,
+`--undecorate`, `--geometry` and `--monitor` — but a real capture feed through it
+has NOT been run yet. A bracket tool in the same family never spawned Dolphin,
+and a Python converter is kept aligned through this file rather than code.
 
 The per-project notes and the handoff prompts are NOT in this repo: they map
 private consumer repos by file and line, so they live in `docs/local/`, which is
