@@ -99,7 +99,7 @@ you did not spawn.
 import { buildProfile, record, dolphinStatus } from "slippi-dolphin-runner";
 
 const paths = { dolphinPath, isoPath };
-const why = dolphinStatus(paths);
+const why = dolphinStatus(paths, { display });   // the display you pass record(), if any
 if (why) throw new Error(why);
 
 // One throwaway profile PER CONCURRENT DOLPHIN. Not optional.
@@ -129,7 +129,10 @@ Three things that bite every adopter:
    `stalled: true` rather than throwing, because measured dumps at the moment
    of a stall have been 27%, 43%, 70% and **94%** complete. Judge the footage
    with your own duration guard — that is what `lastFrame` is returned for.
-   Do not reinstate a "reject on watchdog" rule.
+   Do not reinstate a "reject on watchdog" rule. The one exception is
+   `diagnostic.reason === "early-exit"` (0.5.7): Dolphin quit by itself before
+   its first frame, so there is nothing to judge — log `res.stderrTail` and
+   treat it as a failed launch.
 
 ## 5. Verify the swap
 
@@ -202,6 +205,15 @@ exactly that, deliberately.
   warning rather than a failure, so adopting is safe — but do not promise a
   parked window on those until someone measures it.
 - **Windows is unverified at runtime.** The path resolution is unit-tested and
-  the `taskkill` branch exists; nobody has run it. Do not claim Windows support
-  on the strength of this package.
+  the `taskkill` branch exists (graceful since 0.5.7: `/T`, then `/T /F`), as
+  does the shader-cache junction; nobody has run them. Do not claim Windows
+  support on the strength of this package.
+- **macOS is unverified at runtime too.** Since 0.5.7 a `dolphinPath` ending in
+  `.app` resolves to the executable inside it, and the real profile is read
+  from the bundle's `Contents/Resources/User`. Both are unit-tested against
+  fixture bundles; nobody has recorded on a Mac.
+- **If your app is itself an AppImage**, you no longer need to scrub
+  `APPDIR`/`LD_LIBRARY_PATH` before calling us: since 0.5.7 the spawn drops the
+  AppImage runtime variables and removes `$APPDIR` entries from `PATH` and
+  `LD_LIBRARY_PATH`. Something you pass in `env` is still applied after that.
 

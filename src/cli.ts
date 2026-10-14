@@ -320,6 +320,10 @@ async function recordCmd(argv: string[]) {
     stalled: res.stalled,
     stoppedEarly: res.stoppedEarly,
     placement: res.placement,
+    exitCode: res.exitCode,
+    exitSignal: res.exitSignal,
+    stdoutTail: res.stdoutTail,
+    stderrTail: res.stderrTail,
     ...(res.diagnostic ? { diagnostic: res.diagnostic } : {}),
   });
 }
@@ -416,6 +420,13 @@ async function main() {
 }
 
 main().catch((e: unknown) => {
-  emit({ event: "error", message: e instanceof Error ? e.message : String(e) });
+  // A "produced no video" rejection carries how Dolphin exited and its tails.
+  const extra: Record<string, unknown> = {};
+  if (e && typeof e === "object") {
+    for (const k of ["code", "exitCode", "exitSignal", "stdoutTail", "stderrTail", "diagnostic"] as const) {
+      if (k in e) extra[k] = (e as Record<string, unknown>)[k];
+    }
+  }
+  emit({ event: "error", message: e instanceof Error ? e.message : String(e), ...extra });
   process.exit(2);
 });

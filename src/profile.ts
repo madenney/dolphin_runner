@@ -183,6 +183,12 @@ export async function buildProfile(userDir: string, opts: ProfileOptions & { dol
     if (pauseOnFocusLost != null) {
       dol = setInSection(dol, "Interface", "PauseOnFocusLost", pauseOnFocusLost ? "True" : "False");
     }
+    // Never ask "stop emulation?". A graceful stop is a WM_CLOSE on Windows
+    // (taskkill without /F), and with ConfirmStop on Dolphin answers it with a
+    // modal dialog nobody is there to click: the dump never finalises and the
+    // run escalates to a hard kill. Forced in every mode — a preview or a
+    // mirror is stopped the same way.
+    dol = setInSection(dol, "Interface", "ConfirmStop", "False");
     if (opts.keepWindowOnTop != null) {
       dol = setInSection(dol, "Display", "KeepWindowOnTop", opts.keepWindowOnTop ? "True" : "False");
     }
@@ -239,8 +245,10 @@ export async function buildProfile(userDir: string, opts: ProfileOptions & { dol
   }
 
   // 8. Persistent shader cache, best-effort. A stale real dir or a wrong
-  //    symlink from a previous run is replaced; anything else is left alone.
-  if (opts.shaderCacheDir && os.type() !== "Windows_NT") {
+  //    link from a previous run is replaced; anything else is left alone. On
+  //    Windows it is a directory JUNCTION (no symlink privilege needed), as
+  //    texture packs already were; before 0.5.7 Windows skipped it entirely.
+  if (opts.shaderCacheDir) {
     await linkShaderCache(userDir, opts.shaderCacheDir);
   }
 }
@@ -327,19 +335,39 @@ async function linkTexturePacks(
 
 async function linkShaderCache(userDir: string, target: string): Promise<void> {
   const link = path.join(userDir, "Cache");
+  // A junction must be absolute; POSIX ignores the type argument entirely.
+  const abs = path.resolve(target);
   try {
-    await fsp.mkdir(target, { recursive: true });
+    await fsp.mkdir(abs, { recursive: true });
     const st = await fsp.lstat(link).catch(() => null);
     if (st?.isSymbolicLink()) {
-      if ((await fsp.readlink(link)) === target) return;
+      if (sameLinkTarget(await fsp.readlink(link), abs)) return;
       await fsp.unlink(link);
     } else if (st) {
       await fsp.rm(link, { recursive: true, force: true });
     }
-    await fsp.symlink(target, link);
+    await fsp.symlink(abs, link, "junction");
   } catch {
     /* the old behaviour (a cold cache in userDir), never a failed build */
   }
+}
+
+/**
+ * Does a link's `readlink` value point at `target`? Windows reads a junction
+ * back as `\\?\C:\...` (sometimes with a trailing separator, case as
+ * stored), so a plain `===` would call every junction stale and recreate it on
+ * every build. Pure; `platform` is injectable so the Windows rule is testable.
+ */
+export function sameLinkTarget(linkValue: string, target: string, platform: string = os.type()): boolean {
+  if (platform === "Windows_NT") {
+    const norm = (p: string) =>
+      path.win32
+        .resolve(p.replace(/^\\\\\?\\(UNC\\)?/i, (_m, unc) => (unc ? "\\\\" : "")))
+        .replace(/[\\/]+$/, "")
+        .toLowerCase();
+    return norm(linkValue) === norm(target);
+  }
+  return path.posix.resolve(linkValue) === path.posix.resolve(target);
 }
 
 /**

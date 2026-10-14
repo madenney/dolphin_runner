@@ -1,5 +1,5 @@
 /**
- * record() hands out the Dolphin pid via onSpawn, so a caller (Media) can park
+ * record() hands out the Dolphin pid via onSpawn, so a caller can park
  * the window without `pgrep -f <userDir>`. A fake "Dolphin" shell script stands
  * in: it writes the .avi record() expects and exits.
  */
@@ -42,6 +42,7 @@ test("record() reports the spawned pid once, and its result is unchanged", async
       outDir,
       onSpawn: (pid) => pids.push(pid),
       bootStallMs: 5000,
+      display: ":99",
     });
     assert.equal(pids.length, 1);
     assert.equal(String(pids[0]), fs.readFileSync(path.join(outDir, "pid.txt"), "utf8").trim());

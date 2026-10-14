@@ -48,8 +48,11 @@ test("a replay with no readable length is refused unless the caller supplies one
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "dr-play-"));
   const slp = path.join(tmp, "empty.slp");
   fs.writeFileSync(slp, "not a replay");
+  // Stands in for the binary too, so it must pass dolphinStatus's checks
+  // (executable since 0.5.7; a display on Linux).
+  fs.chmodSync(slp, 0o755);
   await assert.rejects(
-    () => play({ dolphinPath: slp, isoPath: slp }, slp, { userDir: tmp }),
+    () => play({ dolphinPath: slp, isoPath: slp }, slp, { userDir: tmp, display: ":99" }),
     /could not read lastFrame|pass lastFrame or endFrame/,
   );
   fs.rmSync(tmp, { recursive: true, force: true });

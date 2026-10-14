@@ -1,12 +1,40 @@
-export { record, recordArgs, play, playArgs, recordEnv, appNameProp } from "./run.ts";
+export {
+  record,
+  recordArgs,
+  play,
+  playArgs,
+  recordEnv,
+  appNameProp,
+  stripAppImageEnv,
+  APPIMAGE_RUNTIME_VARS,
+  statusContext,
+  noVideoError,
+} from "./run.ts";
 export { placeWindows, checkPlacement, systemX11 } from "./place.ts";
 export type { X11, PlacementHandle, PlacementCheck, Rect, Monitor } from "./place.ts";
 export { obsMirror, obsMirrorEnv, obsMirrorArgs, DEFAULT_GLCAPTURE_LIB } from "./obs.ts";
-export { buildProfile, healRealProfile, BACKGROUND_RECORD, AUDIO_BACKENDS, NULL_AUDIO_BACKEND } from "./profile.ts";
-export { dolphinStatus, dolphinConfigured } from "./status.ts";
+export {
+  buildProfile,
+  healRealProfile,
+  sameLinkTarget,
+  BACKGROUND_RECORD,
+  AUDIO_BACKENDS,
+  NULL_AUDIO_BACKEND,
+} from "./profile.ts";
+export { dolphinStatus, dolphinConfigured, isAppImage, hasLibfuse2, LIBFUSE2_PATHS } from "./status.ts";
+export type { StatusOptions } from "./status.ts";
 export { lastFrameOf, lastFrameFromFooter, lastFrameFromEvents } from "./slp.ts";
-export { pidTree, killTree } from "./kill.ts";
-export { resolveRealProfile, realProfileRoot, profileAt, realProfileExists, appDataPath } from "./paths.ts";
+export { pidTree, killTree, taskkillArgs } from "./kill.ts";
+export type { KillDeps } from "./kill.ts";
+export {
+  resolveRealProfile,
+  realProfileRoot,
+  profileAt,
+  realProfileExists,
+  appDataPath,
+  appBundleOf,
+  resolveDolphinExecutable,
+} from "./paths.ts";
 export { buildComm, writeComm, buildMirrorComm, writeMirrorComm } from "./comm.ts";
 export type { CommFile, MirrorCommFile } from "./comm.ts";
 export { parseFrameLine, reachedEnd, foldEnd } from "./frames.ts";
@@ -31,6 +59,8 @@ export type {
   PlayOptions,
   PlayResult,
   StallDiagnostic,
+  ExitInfo,
+  DolphinRunError,
   ObsMirrorOptions,
   ObsMirrorHandle,
 } from "./types.ts";

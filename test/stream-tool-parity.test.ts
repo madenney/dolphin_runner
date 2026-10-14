@@ -66,7 +66,10 @@ test("freshProfile copies NOTHING from the real profile and creates every overri
   const gfx = read(path.join(userDir, "Config", "GFX.ini"));
   // The real profile's own values must not leak in.
   assert.equal(getInSection(dol, "DSP", "Backend"), "Pulse");
-  assert.equal(getInSection(dol, "Interface", "ConfirmStop"), null);
+  // ConfirmStop is the one [Interface] key we write ourselves (0.5.7): forced
+  // False in every mode so a graceful stop never meets a modal dialog.
+  assert.equal(getInSection(dol, "Interface", "ConfirmStop"), "False");
+  assert.equal(getInSection(dol, "Interface", "PauseOnFocusLost"), null);
   assert.equal(getInSection(gfx, "Settings", "UseFFV1"), null);
   assert.equal(fs.existsSync(path.join(userDir, "Config", "Logger.ini")), false);
   assert.equal(fs.existsSync(path.join(userDir, "GameSettings", "GALE01.ini")), false);

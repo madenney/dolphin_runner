@@ -6,7 +6,7 @@ without hangs, leaked processes, or touching the user's real Dolphin profile.
 Zero runtime dependencies. Node ESM + TypeScript. No Electron, no slippi-js.
 
 > **Status:** used by two VOD recorders, a clip tool, a skins tool, an archiver, and a stream tool's
-> flag-guarded `obs-mirror` path. Windows is unverified at runtime — see CLAUDE.md.
+> flag-guarded `obs-mirror` path. Windows and macOS are unverified at runtime — see CLAUDE.md.
 > Running hidden / muted, and the codec speed trade-off: [docs/background-and-mute.md](docs/background-and-mute.md).
 
 Moving a project off its own Dolphin-spawning code?
@@ -35,7 +35,9 @@ import { buildProfile, record, dolphinStatus } from "slippi-dolphin-runner";
 
 const paths = { dolphinPath: "/path/to/Slippi_Playback.AppImage", isoPath: "/path/to/melee.iso" };
 
-const why = dolphinStatus(paths);
+// Pass the display you will record on, so a service with no DISPLAY of its
+// own isn't told it has none.
+const why = dolphinStatus(paths, { display: ":1" });
 if (why) throw new Error(why);
 
 // One throwaway profile PER CONCURRENT DOLPHIN. Not optional — two Dolphins
@@ -57,7 +59,7 @@ const res = await record(paths, "/path/to/game.slp", {
   onFrame: (cur, end) => report(cur / end),
 });
 
-// res = { avi, wav, lastFrame, stalled, diagnostic }
+// res = { avi, wav, lastFrame, stalled, diagnostic, exitCode, exitSignal, stderrTail, … }
 // Muxing is YOURS. So is the length check — that is what lastFrame is for:
 const expectedSec = (res.lastFrame + 123) / 60;
 ```
@@ -104,6 +106,33 @@ const got = await durationOf(res.avi);
 if (got < expectedSec * 0.9) throw new Error("dump is short — re-record");
 ```
 
+### When Dolphin dies on its own
+
+Every `record()`/`play()` result carries how Dolphin exited — `exitCode`,
+`exitSignal`, and bounded `stdoutTail`/`stderrTail` (the last ~60 lines, frame
+spam excluded). A run that reached its end frame was SIGTERMed by us, so a
+signal or a non-zero code there is normal; these fields are for diagnosis.
+
+The verdict is `diagnostic.reason === "early-exit"`: Dolphin exited **by
+itself before printing a single frame** — a crash or refusal at startup (bad
+ISO, no GL context, an AppImage without FUSE). `stalled` stays `false`. Before
+0.5.7 that case looked exactly like success.
+
+When there is no `.avi` at all, `record()` rejects with a `DolphinRunError`:
+the message still starts `Dolphin produced no video for …`, then says how it
+exited and quotes the last stderr lines; `code` is `"no-video"`, and
+`exitCode`, `exitSignal`, `stdoutTail`, `stderrTail` and `diagnostic` are
+properties on the error.
+
+```ts
+try {
+  await record(paths, slp, opts);
+} catch (e) {
+  if ((e as DolphinRunError).code === "no-video") log((e as DolphinRunError).stderrTail);
+  throw e;
+}
+```
+
 ## API
 
 Every export is public — there is no internal/private split. Types live in
@@ -119,18 +148,21 @@ const res = await record({ dolphinPath, isoPath }, "/path/game.slp", {
   outDir: "/tmp/out",
   userDir: "/tmp/worker-1",   // REQUIRED, one per concurrent Dolphin
 });
-// → { avi, wav, lastFrame, stalled, diagnostic, placement }
+// → { avi, wav, lastFrame, stalled, stoppedEarly, diagnostic, placement,
+//     exitCode, exitSignal, stdoutTail, stderrTail }
 ```
 
 **Resolves even when the watchdog fired** (`stalled: true`); see "A stall is not
 a failure". It rejects only when there is nothing to judge: a bad path, an
-unreadable `lastFrame`, a missing `userDir`, an aborted signal, or a hang that
-produced no `.avi` at all.
+unreadable `lastFrame`, a missing `userDir`, an aborted signal, or a run that
+produced no `.avi` at all (a `DolphinRunError`, see "When Dolphin dies on its own").
 
 `RecordResult`: `avi` (path), `wav` (path or `null`), `lastFrame` (so you can
 length-check without re-reading the `.slp` — expected seconds =
-`(lastFrame + 123) / 60`), `stalled`, `diagnostic` (a `StallDiagnostic` when
-the watchdog fired, else `null`), `placement` (a `PlacementReport` or `null`).
+`(lastFrame + 123) / 60`), `stalled`, `stoppedEarly`, `diagnostic` (a
+`StallDiagnostic` when the watchdog fired or Dolphin exited before its first
+frame, else `null`), `placement` (a `PlacementReport` or `null`), and the
+`ExitInfo` fields `exitCode`, `exitSignal`, `stdoutTail`, `stderrTail`.
 
 ### `obsMirror(paths, opts) → Promise<ObsMirrorHandle>`
 
@@ -162,7 +194,8 @@ and a mirror comm with no frame range; a preview is neither.
 ```ts
 await buildProfile(userDir, { mode: "play", dolphinPath, efbScale: 4 });
 const r = await play(paths, slp, { userDir, startFrame: 1000, endFrame: 1600 });
-// → { lastFrame, stalled, stoppedEarly, diagnostic, placement }
+// → { lastFrame, stalled, stoppedEarly, diagnostic, placement,
+//     exitCode, exitSignal, stdoutTail, stderrTail }
 ```
 
 It keeps `--cout`, so playback stops on the same numeric end-frame rule
@@ -210,9 +243,13 @@ that resolution — an Electron host whose `app.getPath('appData')` disagrees).
 | `gfxBackend` | source | `"OGL"` \| `"Vulkan"`. OGL is required for obs-vkcapture |
 | `emulationSpeed` | source | `[Core] EmulationSpeed`; 1 = real time, 0 = unlimited |
 | `vsync`, `shaderCompilationMode`, `msaa` | source | GFX tuning |
-| `shaderCacheDir` | none | symlinks `<userDir>/Cache` here so shaders survive a throwaway dir. **Per instance** — a shared cache corrupts |
+| `shaderCacheDir` | none | links `<userDir>/Cache` here (a symlink; a directory junction on Windows) so shaders survive a throwaway dir. **Per instance** — a shared cache corrupts |
 | `freshProfile` | off | build from empty inis instead of copying the real profile |
 | `sourceProfile` | resolved | override where the real profile is |
+
+Always written, in every mode: `[Interface] ConfirmStop = False`. A graceful
+stop is a polite close (SIGTERM, or WM_CLOSE on Windows); with ConfirmStop on,
+Dolphin would answer it with a "stop emulation?" dialog nobody is there to click.
 
 `BACKGROUND_RECORD` is a preset to spread in: `pauseOnFocusLost: false`,
 `keepWindowOnTop: false`, `vsync: false`, `window: { width: 640, height: 360 }`.
@@ -230,7 +267,7 @@ is refused at `efbScale: 2`, which is 939 wide) and writes ~12 GB per 75 s game;
 |---|---|---|
 | `userDir` | — | **REQUIRED.** The dump path is a property of the user dir, so two Dolphins sharing one silently overwrite each other's frames |
 | `display` | inherited | `DISPLAY` for the GL context |
-| `env` | — | extra environment; the named options below win over it |
+| `env` | — | extra environment; the named options below win over it. The inherited environment is cleaned first: a parent AppImage's `APPDIR`/`APPIMAGE`/`ARGV0`/`OWD` are dropped and `$APPDIR` entries leave `PATH`/`LD_LIBRARY_PATH` (`stripAppImageEnv`) |
 | `audioSink` | — | sets `PULSE_SINK` **and** `PIPEWIRE_NODE` (the ALSA backend ignores the former) |
 | `appName` | — | `application.name` for the audio stream. WirePlumber remembers volume/mute **by that name**, and every Dolphin is otherwise `dolphin-emu` — hand-mute one and every future Dolphin starts muted |
 | `placement` | — | `{ workspace, required?, restoreFocus?, timeoutMs? }` — see below |
@@ -291,15 +328,17 @@ spawns Dolphin itself.
 
 | | |
 |---|---|
-| `dolphinStatus(paths)` / `dolphinConfigured(paths)` | why we can't run, as a human sentence, or `null` |
+| `dolphinStatus(paths, opts?)` / `dolphinConfigured(paths, opts?)` | why we can't run, as a human sentence, or `null`. Besides missing paths it catches, without launching anything: a binary that isn't executable (with the `chmod +x`), a directory or an unresolvable `.app`, a Linux AppImage with no `libfuse.so.2` (install libfuse2 or set `APPIMAGE_EXTRACT_AND_RUN=1`), and no `DISPLAY`/`WAYLAND_DISPLAY` on Linux. `opts`: `{ platform?, env?, display? }` — **pass `display` if you hand it to `record()` instead of setting DISPLAY** |
+| `resolveDolphinExecutable(dolphinPath)` | a macOS `.app` → `Contents/MacOS/<CFBundleExecutable>` (else the only file there); anything else unchanged. What every spawn uses |
 | `lastFrameOf(slp)` | last frame from the UBJSON footer — a byte scan, no slippi-js |
 | `healRealProfile(dolphinPath)` | the one deliberate write to the real profile: force its dump flags off, to undo damage from older in-place versions |
 | `writeMirrorComm(path, slp)` / `writeComm` / `buildComm` | the comm file Dolphin reads |
-| `pidTree(pid)` / `killTree(pid, graceful?)` | the tree walk and the kill. `graceful` = SIGTERM then SIGKILL |
+| `pidTree(pid)` / `killTree(pid, graceful?, escalateMs?)` | the tree walk and the kill. `graceful` = SIGTERM then SIGKILL; on Windows `taskkill /T` (WM_CLOSE) then `/T /F` |
+| `stripAppImageEnv(env)` | the inherited env minus a parent AppImage's runtime variables and `$APPDIR` path entries |
 | `recordEnv`, `obsMirrorEnv`, `obsMirrorArgs`, `appNameProp` | exactly what gets spawned, pure and unit-tested |
 | `parseFrameLine`, `reachedEnd`, `foldEnd` | the `--cout` rules, pure and unit-tested |
 | `setInSection`, `setEverywhere`, `getInSection` | the ini editor (`setInSection` creates a missing key *and* section) |
-| `resolveRealProfile`, `realProfileRoot`, `profileAt`, `appDataPath` | where a profile lives, per OS |
+| `resolveRealProfile`, `realProfileRoot`, `profileAt`, `appDataPath` | where a profile lives, per OS. macOS: the bundle's `Contents/Resources/User`, else `~/Library/Application Support/SlippiPlayback` |
 | `AUDIO_BACKENDS`, `NULL_AUDIO_BACKEND`, `BACKGROUND_RECORD`, `DEFAULT_GLCAPTURE_LIB` | constants |
 
 ## CLI (for non-Node consumers)
@@ -326,8 +365,11 @@ dolphin-runner play \
 ```
 
 Events on stdout, one JSON line each: `started`, `progress`, `warning`,
-`placed`, `result` (with `avi`, `wav`, `lastFrame`, `stalled`, `stoppedEarly`),
-`error`. Exit code is non-zero on failure.
+`placed`, `result` (with `avi`, `wav`, `lastFrame`, `stalled`, `stoppedEarly`,
+`exitCode`, `exitSignal`, `stdoutTail`, `stderrTail`, and `diagnostic` when
+set), `error` (with `message`; a "produced no video" error also carries
+`code: "no-video"`, `exitCode`, `exitSignal`, the tails and `diagnostic`).
+Exit code is non-zero on failure.
 
 ```sh
 dolphin-runner obs-mirror \

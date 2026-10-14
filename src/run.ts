@@ -6,11 +6,14 @@ import { writeComm } from "./comm.ts";
 import { foldEnd, parseFrameLine, reachedEnd } from "./frames.ts";
 import { killTree } from "./kill.ts";
 import { checkPlacement, placeWindows, systemX11, warn, type PlacementHandle } from "./place.ts";
+import { resolveDolphinExecutable } from "./paths.ts";
 import { lastFrameOf } from "./slp.ts";
 import { dolphinStatus } from "./status.ts";
 import { tailBuffer } from "./tail.ts";
 import type {
   DolphinPaths,
+  DolphinRunError,
+  ExitInfo,
   PlacementReport,
   PlayOptions,
   PlayResult,
@@ -33,8 +36,7 @@ interface SpawnPlan {
  * Order: inherited, then the caller's `env`, then the named options (which win).
  */
 export function recordEnv(base: NodeJS.ProcessEnv, o: Pick<RunOptions, "env" | "display" | "audioSink" | "appName">) {
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(base)) if (v != null) env[k] = v;
+  const env = stripAppImageEnv(base);
   Object.assign(env, o.env ?? {});
   if (o.display) env.DISPLAY = o.display;
   if (o.audioSink) {
@@ -44,6 +46,38 @@ export function recordEnv(base: NodeJS.ProcessEnv, o: Pick<RunOptions, "env" | "
     env.PIPEWIRE_NODE = o.audioSink;
   }
   if (o.appName) env.PULSE_PROP_OVERRIDE = appNameProp(o.appName);
+  return env;
+}
+
+/** The AppImage runtime's own variables. Meaningless (and misleading) to a child. */
+export const APPIMAGE_RUNTIME_VARS = ["APPDIR", "APPIMAGE", "ARGV0", "OWD"] as const;
+
+/**
+ * A copy of `base` without what an AppImage runtime injected into its OWN
+ * process. Pure, for tests.
+ *
+ * A consumer that itself runs as an AppImage (an Electron app, typically)
+ * hands every child `APPDIR`/`APPIMAGE`/`ARGV0`/`OWD` and a PATH and
+ * LD_LIBRARY_PATH led by `$APPDIR/usr/...`. Dolphin then resolves libraries
+ * from the CONSUMER's bundle first — a different libstdc++/GL/Qt than it was
+ * built against — and an AppImage Dolphin can mistake the consumer's
+ * variables for its own. Only entries under `$APPDIR` are removed from the two
+ * path lists; everything else the user had stays, in order. A list left empty
+ * is dropped rather than set to "".
+ */
+export function stripAppImageEnv(base: NodeJS.ProcessEnv): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(base)) if (v != null) env[k] = v;
+  const appdir = env.APPDIR?.replace(/\/+$/, "");
+  for (const k of APPIMAGE_RUNTIME_VARS) delete env[k];
+  if (!appdir) return env;
+  const inside = (entry: string) => entry === appdir || entry.startsWith(`${appdir}/`);
+  for (const k of ["PATH", "LD_LIBRARY_PATH"]) {
+    if (env[k] == null) continue;
+    const kept = env[k]!.split(":").filter((e) => !inside(e));
+    if (kept.some(Boolean)) env[k] = kept.join(":");
+    else delete env[k];
+  }
   return env;
 }
 
@@ -58,20 +92,31 @@ export function appNameProp(name: string): string {
   return `application.name='${name}'`;
 }
 
+/** What runDolphin hands back to record()/play(). */
+interface RunOutcome extends ExitInfo {
+  stalled: boolean;
+  diagnostic: StallDiagnostic | null;
+  stoppedEarly: boolean;
+}
+
+/** How long to wait after exit for the last of stdout/stderr to drain. */
+const DRAIN_AFTER_EXIT_MS = 500;
+
 /** Drive one Dolphin to completion, frame-watched. record()'s spawn loop. */
 async function runDolphin(
   paths: DolphinPaths,
   slpPath: string,
   plan: SpawnPlan,
   o: RunOptions,
-): Promise<{ stalled: boolean; diagnostic: StallDiagnostic | null; stoppedEarly: boolean }> {
+): Promise<RunOutcome> {
   const bootStallMs = o.bootStallMs ?? DEFAULT_BOOT_STALL_MS;
   const frameStallMs = o.frameStallMs ?? DEFAULT_FRAME_STALL_MS;
   const startedAt = Date.now();
 
   return await new Promise((resolvePromise, reject) => {
     const env = recordEnv(process.env, o);
-    const child = spawn(paths.dolphinPath, plan.args, { env });
+    // A macOS .app is a directory; spawn the executable inside it.
+    const child = spawn(resolveDolphinExecutable(paths.dolphinPath), plan.args, { env });
     // Hand the pid out as soon as there is one (window parking, diagnostics). A
     // throwing callback is the caller's bug, never a failed run.
     child.once("spawn", () => {
@@ -173,6 +218,9 @@ async function runDolphin(
       }
       sawAnyFrame = true;
       lastProgress = Date.now();
+      // Lines still draining after exit count as "it printed frames" but must
+      // not kill anything: that pid is gone and may already be someone else's.
+      if (settled) return;
       const current = parsed.frame;
       // A caller that returns "stop" wants the footage it already has — a
       // stage shot is N frames around one frame, not a whole game. Aborting
@@ -212,18 +260,53 @@ async function runDolphin(
       reject(e);
     });
 
-    child.on("exit", () => {
+    // Both pipes at EOF. Not `close`: a grandchild that inherited the pipes
+    // (the AppImage FUSE daemon, gotcha 18) can hold them open for seconds
+    // after the emulator is gone, and the result must not wait on it.
+    let openStreams = 2;
+    let onDrained: (() => void) | null = null;
+    const drained = () => {
+      if (--openStreams === 0) onDrained?.();
+    };
+    child.stdout?.once("end", drained);
+    child.stderr?.once("end", drained);
+
+    child.on("exit", (code, signal) => {
       if (settled) return;
       settled = true;
       finish();
-      rl.close();
-      if (o.signal?.aborted) return reject(new Error("canceled"));
-      // A STALL IS A SILENCE, NOT A VERDICT. Measured dumps at the moment of a
-      // stall have been 27%, 43%, 70% and 94% complete — one was finished in
-      // every sense except announcing it, and rejecting here throws away work
-      // that already cost its full real-time record. Resolve, report `stalled`,
-      // and let the caller's duration guard judge the footage.
-      resolvePromise({ stalled, diagnostic, stoppedEarly });
+      const done = () => {
+        onDrained = null;
+        rl.close();
+        if (o.signal?.aborted) return reject(new Error("canceled"));
+        const exit: ExitInfo = {
+          exitCode: code,
+          exitSignal: signal,
+          stdoutTail: [...stdoutTail.lines],
+          stderrTail: [...stderrTail.lines],
+        };
+        // Dolphin went away BY ITSELF before printing a single frame: it
+        // crashed or refused at startup (bad ISO, no GL context, an AppImage
+        // with no FUSE, a missing library). Before 0.5.7 this resolved exactly
+        // like success, with nothing to tell the two apart.
+        if (!killedAtEnd && !stalled && !stoppedEarly && !sawAnyFrame && diagnostic == null) {
+          diagnostic = { ...snapshot("early-exit"), exitCode: code, exitSignal: signal };
+        }
+        // A STALL IS A SILENCE, NOT A VERDICT. Measured dumps at the moment of a
+        // stall have been 27%, 43%, 70% and 94% complete — one was finished in
+        // every sense except announcing it, and rejecting here throws away work
+        // that already cost its full real-time record. Resolve, report `stalled`,
+        // and let the caller's duration guard judge the footage.
+        resolvePromise({ stalled, diagnostic, stoppedEarly, ...exit });
+      };
+      if (openStreams === 0) return done();
+      // The exit event can beat the last chunk of stderr — which is the chunk
+      // that says why it died. Wait for EOF, but never long.
+      const t = setTimeout(done, DRAIN_AFTER_EXIT_MS);
+      onDrained = () => {
+        clearTimeout(t);
+        done();
+      };
     });
   });
 }
@@ -242,7 +325,7 @@ export async function record(
 ): Promise<RecordResult> {
   if (o.signal?.aborted) throw new Error("canceled");
   if (!existsSync(slpPath)) throw new Error(`replay not found: ${slpPath}`);
-  const why = dolphinStatus(paths);
+  const why = dolphinStatus(paths, statusContext(o));
   if (why) throw new Error(`cannot record: ${why}`);
   if (!existsSync(o.userDir)) throw new Error(`user dir does not exist: ${o.userDir}`);
 
@@ -286,11 +369,9 @@ export async function record(
       o.onSpawn?.(pid);
     },
   };
-  let stalled: boolean;
-  let diagnostic: StallDiagnostic | null;
-  let stoppedEarly: boolean;
+  let out: RunOutcome;
   try {
-    ({ stalled, diagnostic, stoppedEarly } = await runDolphin(paths, slpPath, { args, commPath }, runOpts));
+    out = await runDolphin(paths, slpPath, { args, commPath }, runOpts);
   } finally {
     (placing as PlacementHandle | null)?.stop();
   }
@@ -298,16 +379,20 @@ export async function record(
 
   const avi = path.join(o.outDir, `${base}.avi`);
   const wav = path.join(o.outDir, `${base}.wav`);
-  if (!existsSync(avi)) throw new Error(`Dolphin produced no video for ${slpPath}`);
+  if (!existsSync(avi)) throw noVideoError(slpPath, out);
 
   return {
     avi,
     wav: existsSync(wav) ? wav : null,
     lastFrame,
-    stalled,
-    stoppedEarly,
-    diagnostic,
+    stalled: out.stalled,
+    stoppedEarly: out.stoppedEarly,
+    diagnostic: out.diagnostic,
     placement,
+    exitCode: out.exitCode,
+    exitSignal: out.exitSignal,
+    stdoutTail: out.stdoutTail,
+    stderrTail: out.stderrTail,
   };
 }
 
@@ -363,7 +448,7 @@ export function playArgs(
 export async function play(paths: DolphinPaths, slpPath: string, o: PlayOptions): Promise<PlayResult> {
   if (o.signal?.aborted) throw new Error("canceled");
   if (!existsSync(slpPath)) throw new Error(`replay not found: ${slpPath}`);
-  const why = dolphinStatus(paths);
+  const why = dolphinStatus(paths, statusContext(o));
   if (why) throw new Error(`cannot play: ${why}`);
   if (!existsSync(o.userDir)) throw new Error(`user dir does not exist: ${o.userDir}`);
 
@@ -395,17 +480,58 @@ export async function play(paths: DolphinPaths, slpPath: string, o: PlayOptions)
       o.onSpawn?.(pid);
     },
   };
-  let stalled: boolean;
-  let diagnostic: StallDiagnostic | null;
-  let stoppedEarly: boolean;
+  let out: RunOutcome;
   try {
-    ({ stalled, diagnostic, stoppedEarly } = await runDolphin(paths, slpPath, { args, commPath }, runOpts));
+    out = await runDolphin(paths, slpPath, { args, commPath }, runOpts);
   } finally {
     (placing as PlacementHandle | null)?.stop();
   }
   const placement = placing ? await (placing as PlacementHandle).done : place.skipped;
 
-  return { lastFrame, stalled, stoppedEarly, diagnostic, placement };
+  return {
+    lastFrame,
+    stalled: out.stalled,
+    stoppedEarly: out.stoppedEarly,
+    diagnostic: out.diagnostic,
+    placement,
+    exitCode: out.exitCode,
+    exitSignal: out.exitSignal,
+    stdoutTail: out.stdoutTail,
+    stderrTail: out.stderrTail,
+  };
+}
+
+/** What dolphinStatus should know about a run: its env and display. */
+export function statusContext(o: Pick<RunOptions, "env" | "display">): { env: NodeJS.ProcessEnv; display?: string } {
+  return { env: { ...process.env, ...(o.env ?? {}) }, display: o.display };
+}
+
+/** How many stderr lines go into the "produced no video" MESSAGE (all of them are on the error). */
+const NO_VIDEO_MESSAGE_LINES = 8;
+
+/**
+ * The "produced no video" rejection, carrying what Dolphin said. It used to be
+ * the bare sentence, and a run that produces no AVI produces no diagnostic
+ * either, so contention, a bad profile and a startup crash all looked the same.
+ * The message starts exactly as before, for anyone matching on it.
+ */
+export function noVideoError(slpPath: string, out: ExitInfo & { diagnostic: StallDiagnostic | null }): DolphinRunError {
+  const how =
+    out.exitSignal != null ? `killed by ${out.exitSignal}` : out.exitCode != null ? `exit code ${out.exitCode}` : "no exit status";
+  const why = out.diagnostic ? `, ${out.diagnostic.reason}` : "";
+  const said = out.stderrTail.slice(-NO_VIDEO_MESSAGE_LINES);
+  const msg =
+    `Dolphin produced no video for ${slpPath} (${how}${why})` +
+    (said.length ? `; stderr tail:\n${said.join("\n")}` : "; stderr was empty");
+  return Object.assign(new Error(msg), {
+    code: "no-video" as const,
+    replay: slpPath,
+    exitCode: out.exitCode,
+    exitSignal: out.exitSignal,
+    stdoutTail: out.stdoutTail,
+    stderrTail: out.stderrTail,
+    diagnostic: out.diagnostic,
+  });
 }
 
 /**

@@ -376,3 +376,45 @@ test("dumpCodec 'default' forces UseFFV1 off and leaves DumpCodec EMPTY", async 
   assert.equal(getInSection(gfx, "Settings", "UseFFV1"), "False");
   assert.equal(getInSection(gfx, "Settings", "DumpCodec"), "");
 });
+
+// --- 0.5.7 -------------------------------------------------------------------
+
+import { sameLinkTarget } from "../src/profile.ts";
+
+test("REGRESSION: ConfirmStop is forced off in every mode, whatever the real profile says", async () => {
+  // A graceful stop on Windows is WM_CLOSE; with ConfirmStop on, Dolphin
+  // answers it with a modal "stop emulation?" that nobody is there to click.
+  fs.writeFileSync(path.join(realRoot, "Config", "Dolphin.ini"), "[Interface]\nConfirmStop = True\n");
+  for (const mode of ["record", "play"] as const) {
+    await buildProfile(userDir, { mode });
+    assert.equal(getInSection(read(path.join(userDir, "Config", "Dolphin.ini")), "Interface", "ConfirmStop"), "False");
+  }
+  await buildProfile(path.join(tmp, "fresh"), { mode: "play", freshProfile: true });
+  assert.equal(getInSection(read(path.join(tmp, "fresh", "Config", "Dolphin.ini")), "Interface", "ConfirmStop"), "False");
+  assert.equal(getInSection(read(path.join(realRoot, "Config", "Dolphin.ini")), "Interface", "ConfirmStop"), "True");
+});
+
+test("shader cache: a relative dir is linked absolute, and a rebuild leaves the link alone", async () => {
+  const prevCwd = process.cwd();
+  process.chdir(tmp);
+  try {
+    await buildProfile(userDir, { mode: "play", shaderCacheDir: "shaders-rel" });
+    const link = path.join(userDir, "Cache");
+    assert.equal(fs.readlinkSync(link), path.join(tmp, "shaders-rel"));
+    const before = fs.lstatSync(link).ino;
+    await buildProfile(userDir, { mode: "play", shaderCacheDir: "shaders-rel" });
+    assert.equal(fs.lstatSync(link).ino, before, "an up-to-date link is not recreated");
+  } finally {
+    process.chdir(prevCwd);
+  }
+});
+
+test("sameLinkTarget: a Windows junction reads back as \\\\?\\C:\\..., and that is the same place", () => {
+  assert.ok(sameLinkTarget("\\\\?\\C:\\Shaders\\w1\\", "C:\\Shaders\\w1", "Windows_NT"));
+  assert.ok(sameLinkTarget("\\\\?\\c:\\shaders\\W1", "C:\\Shaders\\w1", "Windows_NT"));
+  assert.ok(sameLinkTarget("C:\\Shaders\\w1", "C:/Shaders/w1", "Windows_NT"));
+  assert.ok(sameLinkTarget("\\\\?\\UNC\\srv\\share\\c", "\\\\srv\\share\\c", "Windows_NT"));
+  assert.ok(!sameLinkTarget("\\\\?\\C:\\Shaders\\w2", "C:\\Shaders\\w1", "Windows_NT"));
+  assert.ok(sameLinkTarget("/a/b/", "/a/b", "Linux"));
+  assert.ok(!sameLinkTarget("/a/B", "/a/b", "Linux"), "POSIX paths are case-sensitive");
+});

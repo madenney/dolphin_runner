@@ -6,6 +6,80 @@ failure mode this package exists to prevent.
 
 Until 1.0 the minor is the breaking digit: `0.x.0` may break, `0.x.y` never does.
 
+## 0.5.7 — 2026-10-13
+
+Diagnosis and cross-platform fixes. Every new result field is additive; the
+API and the CLI contract are otherwise unchanged.
+
+**May affect you**
+
+- **`dolphinStatus` now says no on Linux when neither `DISPLAY` nor
+  `WAYLAND_DISPLAY` is set.** `record()`, `play()` and `obsMirror()` pass
+  their own `display` and `env`, so they are fine. A consumer that preflights
+  with `dolphinStatus(paths)` from a process with no DISPLAY, and only hands
+  `display` to `record()`, must now pass it to the preflight as well:
+  `dolphinStatus(paths, { display })`. It also now refuses a `dolphinPath`
+  that is not executable or is a directory; both used to fail at spawn instead.
+- **`[Interface] ConfirmStop = False` is written into every built profile**,
+  record and play, fresh or copied. It was inherited before. A preview or
+  mirror stopped by the runner never wanted the dialog.
+- **`record()` and `play()` wait up to 500 ms after Dolphin exits** for the
+  last of its stdout/stderr, so the tail includes the line that says why it
+  died. They do not wait for the pipes to close, which the AppImage FUSE
+  daemon can hold open for seconds (gotcha 18).
+
+**Added**
+
+- **How Dolphin exited, on every result.** `RecordResult` and `PlayResult` now
+  extend `ExitInfo`: `exitCode`, `exitSignal`, `stdoutTail`, `stderrTail` (the
+  last ~60 lines each, frame spam excluded). Both used to be discarded.
+- **`diagnostic.reason: "early-exit"`.** Dolphin exited by itself before
+  printing a single frame — a startup crash or refusal. It used to resolve
+  `{ stalled: false, diagnostic: null }`, exactly like success. `stalled`
+  stays false; `StallDiagnostic` gains optional `exitCode`/`exitSignal`.
+  A Dolphin that exits by itself after printing frames is not flagged (a batch
+  Dolphin may stop a frame short of the end we compare against).
+- **"Dolphin produced no video" says why.** The rejection is a
+  `DolphinRunError`: the message starts exactly as before, then adds the exit
+  and the last 8 stderr lines; `code: "no-video"`, `replay`, `exitCode`,
+  `exitSignal`, `stdoutTail`, `stderrTail` and `diagnostic` are properties.
+  The CLI's `error` event carries the same fields, and its `result` event the
+  new `ExitInfo` fields. This is the case gotcha 16 says cannot tell
+  contention from a bad profile — it now has evidence attached.
+- **`dolphinStatus` catches startup failures without launching**: not
+  executable (with the `chmod +x`), a directory or an `.app` with nothing to
+  run, and a Linux AppImage with no `libfuse.so.2` (install libfuse2, or set
+  `APPIMAGE_EXTRACT_AND_RUN=1`). Takes `{ platform?, env?, display? }`.
+  `isAppImage`, `hasLibfuse2` and `LIBFUSE2_PATHS` are exported.
+- **macOS app bundles.** `resolveDolphinExecutable(dolphinPath)` turns
+  `Slippi Dolphin.app` into `Contents/MacOS/<CFBundleExecutable>` (falling
+  back to the only file there); every spawn and `dolphinStatus` use it.
+  `realProfileRoot(dolphinPath, "Darwin")` reads the bundle's
+  `Contents/Resources/User`, where Slippi's mac Playback keeps its profile, and
+  falls back to `~/Library/Application Support/SlippiPlayback` only when that
+  folder is absent. `appBundleOf` is exported. **Unverified on a real Mac.**
+- **Spawn env hygiene.** A consumer that itself runs as an AppImage handed
+  Dolphin its `APPDIR`/`APPIMAGE`/`ARGV0`/`OWD`, and a `PATH`/`LD_LIBRARY_PATH`
+  led by its own bundle. `stripAppImageEnv` drops those variables and only the
+  `$APPDIR` entries of the two lists; `recordEnv` and `obsMirrorEnv` apply it
+  to the inherited env, before the caller's `env`.
+
+**Fixed (Windows, unverified at runtime)**
+
+- **A graceful kill was a hard kill.** `killTree(pid, true)` ran
+  `taskkill /T /F` on Windows, so a recording that reached its end frame was
+  terminated mid-write and AVIDump never finalised the file. Graceful is now
+  `taskkill /T` (WM_CLOSE), escalating to `/T /F` after `escalateMs` if the
+  process is still there; with `ConfirmStop = False` (above) Dolphin closes
+  instead of asking. taskkill is spawned with `windowsHide`. `killTree` takes
+  an optional 4th argument, `KillDeps`, to inject the platform;
+  `taskkillArgs` is exported.
+- **`shaderCacheDir` was ignored on Windows.** It is now a directory junction
+  there, as texture packs already were, and still best-effort. The "is the
+  link current?" check tolerates the `\\?\` prefix Windows reads junctions
+  back with (`sameLinkTarget`, exported). The link target is now always
+  absolute on every platform.
+
 ## 0.5.6 — 2026-10-11
 
 No code changed. Finishes 0.5.5: that pass left two private commit hashes in the

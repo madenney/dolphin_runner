@@ -4,7 +4,8 @@ import path from "node:path";
 import { writeMirrorComm } from "./comm.ts";
 import { killTree } from "./kill.ts";
 import { buildProfile } from "./profile.ts";
-import { appNameProp, preparePlacement } from "./run.ts";
+import { resolveDolphinExecutable } from "./paths.ts";
+import { appNameProp, preparePlacement, statusContext, stripAppImageEnv } from "./run.ts";
 import { dolphinStatus } from "./status.ts";
 import { tailBuffer } from "./tail.ts";
 import type { DolphinPaths, ObsMirrorHandle, ObsMirrorOptions, ProfileOptions } from "./types.ts";
@@ -39,8 +40,8 @@ export function obsMirrorEnv(
     | "env"
   >,
 ): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [k, v] of Object.entries(base)) if (v != null) env[k] = v;
+  // Minus a parent AppImage's own variables and library paths (see stripAppImageEnv).
+  const env = stripAppImageEnv(base);
   // The caller's extras go in before everything below, so capture-critical
   // variables can't be clobbered by accident. An LD_PRELOAD here is treated as
   // "already had" and kept in the middle of the chain.
@@ -118,7 +119,7 @@ export function obsMirrorArgs(paths: DolphinPaths, o: Pick<ObsMirrorOptions, "us
  */
 export async function obsMirror(paths: DolphinPaths, o: ObsMirrorOptions): Promise<ObsMirrorHandle> {
   if (o.signal?.aborted) throw new Error("canceled");
-  const why = dolphinStatus(paths);
+  const why = dolphinStatus(paths, statusContext(o));
   if (why) throw new Error(`cannot mirror: ${why}`);
   if (!Number.isFinite(o.efbScale) || o.efbScale <= 0) throw new Error("efbScale is required");
 
@@ -137,9 +138,11 @@ export async function obsMirror(paths: DolphinPaths, o: ObsMirrorOptions): Promi
 
   const env = obsMirrorEnv(process.env, o);
   const args = obsMirrorArgs(paths, o);
-  const child = spawn(paths.dolphinPath, args, {
+  // A macOS .app is a directory; spawn the executable inside it.
+  const exe = resolveDolphinExecutable(paths.dolphinPath);
+  const child = spawn(exe, args, {
     env,
-    cwd: path.dirname(paths.dolphinPath),
+    cwd: path.dirname(exe),
     // stdout is nobody's business; stderr is DRAINED into a bounded tail so a
     // chatty Dolphin can never block on a full pipe (gotcha 10).
     stdio: ["ignore", "ignore", "pipe"],

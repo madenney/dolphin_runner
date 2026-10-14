@@ -83,21 +83,38 @@ every helper is API. Two layers:
   tested in `test/obs.test.ts`: LD_PRELOAD order, no stray colon, no `-b`/
   `--cout`/dump flags. The spawn in `obsMirror()` is not.
 
-**Untested by the suite** (needs a process or a real Dolphin):
-- `status.ts` — `dolphinStatus(paths)` → human reason or `null`. Parameterised,
-  never reads env at import.
+- `status.ts` — `dolphinStatus(paths, { platform?, env?, display? })` →
+  human reason or `null`. Parameterised, never reads env at import. Since
+  0.5.7 it also catches, without launching: not executable, a directory / an
+  unresolvable `.app`, a Linux AppImage with no `libfuse.so.2`
+  (`hasLibfuse2()`: common lib dirs, then `ldconfig -p` once), and no
+  DISPLAY/WAYLAND_DISPLAY on Linux. `test/status.test.ts`.
 - `kill.ts` — `pidTree` (POSIX `pgrep -P` walk) and `killTree` (children first;
-  SIGTERM→SIGKILL escalation when `graceful`; `taskkill /T /F` on Windows).
+  SIGTERM→SIGKILL escalation when `graceful`; on Windows graceful is
+  `taskkill /T` (WM_CLOSE) then `/T /F` if still alive, hard is `/T /F`). The
+  OS is injectable (`KillDeps`), so `test/kill.test.ts` pins both branches.
+- `paths.ts` also holds `resolveDolphinExecutable` (a macOS `.app` → its
+  `Contents/MacOS/<CFBundleExecutable>`; every spawn goes through it).
+
+**Untested by the suite** (needs a process or a real Dolphin):
 - `run.ts` — `runDolphin()` is the frame-watched spawn loop behind `record()`
   and `play()` (a frame range on screen, no dump — the preview shape, added
   2026-10-10; the old batch-mode `mirror()` was removed 2026-10-09).
-  `recordEnv()` builds its env: inherited → `env` → `display`/`audioSink`/`appName`. `record()` = validate → write
+  `recordEnv()` builds its env: inherited (minus a parent AppImage's
+  variables and `$APPDIR` path entries, `stripAppImageEnv`) → `env` → `display`/`audioSink`/`appName`. `record()` = validate → write
   comm.json into `outDir` → spawn with `-i comm -o base --output-directory -b
   -e iso --user userDir --hide-seekbar --cout` → readline stdout / drain stderr
-  / two-tier watchdog → resolve `{ avi, wav, lastFrame, stalled, diagnostic }`.
+  / two-tier watchdog → resolve `{ avi, wav, lastFrame, stalled, diagnostic,
+  exitCode, exitSignal, stdoutTail, stderrTail }`.
   The bounded stdout/stderr tails (gotcha 10) are `tailBuffer()` in `tail.ts`;
-  when the watchdog fires they are snapshotted into `diagnostic` (otherwise
-  `null`).
+  when the watchdog fires they are snapshotted into `diagnostic`, and when
+  Dolphin exits by itself before its first frame `diagnostic.reason` is
+  `"early-exit"` (otherwise `null`). After `exit` it waits up to 500 ms for
+  both pipes' EOF — the last stderr chunk is the one that says why — but not
+  for `close`, which the FUSE daemon (gotcha 18) can hold open. "Produced no
+  video" rejects with a `DolphinRunError` carrying the same fields. Its
+  exit handling is exercised by fake-Dolphin shell scripts
+  (`test/exit.test.ts`, `test/onspawn.test.ts`); a real Dolphin only by smoke.
 - `obs.ts` (the spawn) — `obsMirror()`: a long-lived, OBS-capturable Dolphin for a stream
   tool. `buildProfile(mode: "play", …)` with the capture tuning forced (OGL,
   Pulse, Latency 60, fullscreen, VSync off), env from `obsMirrorEnv()`
@@ -201,7 +218,9 @@ Each of these cost somebody an event. The comments in the code say so; keep them
     caller's duration guard judge. Never reject on the watchdog alone.
 13. **Kill the whole tree.** An AppImage execs. POSIX walks `pgrep -P`, children
     first (killing the parent first reparents the tree to init and orphans the
-    process you wanted). Windows: `taskkill /T /F`.
+    process you wanted). Windows: `taskkill /T`, escalating to `/T /F` — never
+    `/F` first when graceful, or AVIDump never finalises (0.5.7). That relies on
+    `[Interface] ConfirmStop = False`, which buildProfile forces in every mode.
 14. **Never mutate the real profile.** Build a throwaway from a copy.
     `healRealProfile()` is the one deliberate write, forcing dump flags off to
     undo damage from older in-place versions.
@@ -284,6 +303,13 @@ Each of these cost somebody an event. The comments in the code say so; keep them
 - **Windows is UNVERIFIED at runtime.** Path *resolution* is unit-tested; nobody
   has confirmed a Windows Playback Dolphin honours `--user` with Sys-relative-to-
   binary. Do not claim Windows support until someone runs it on a Windows box.
+  Also unrun there (0.5.7): the graceful `taskkill /T` → WM_CLOSE → AVIDump
+  finalise path, and the shader-cache directory junction.
+- **macOS is UNVERIFIED at runtime.** `.app` resolution and the in-bundle
+  profile (`<app>/Contents/Resources/User`, falling back to
+  `~/Library/Application Support/SlippiPlayback`) are unit-tested against
+  fixture bundles only (0.5.7). Whether Slippi's mac Playback honours
+  `--user` and `--cout` the same way is unknown.
 - **`record()` is verified on Linux only by `npm run smoke`, by hand.** First
   passing run 2026-09-18: 4383-frame replay, AVI 75.07 s vs 75.10 s expected,
   no stall, no leaked processes, real profile byte-identical. Re-run 2026-10-09

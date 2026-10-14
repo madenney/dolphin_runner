@@ -219,7 +219,8 @@ export interface ProfileOptions {
   /** `[Settings] ShaderCompilationMode`. 0 = specialized/synchronous-on-demand. */
   shaderCompilationMode?: 0 | 1 | 2 | 3;
   /**
-   * Symlink `<userDir>/Cache` here so shaders compiled once persist across
+   * Link `<userDir>/Cache` here (a symlink; a directory junction on Windows,
+   * since 0.5.7) so shaders compiled once persist across
    * throwaway dirs and reboots. PER INSTANCE, never shared: two Dolphins
    * writing one cache corrupt it, shaders never stick, and every launch is a
    * cold (audio-stalling) recompile. Best-effort; a failure never fails the build.
@@ -330,8 +331,17 @@ export interface StallDiagnostic {
    * Which rule fired. `"boot-stall"` and `"frame-stall"` are silences (the
    * process was SIGKILLed); `"hard-timeout"` is a Dolphin that kept printing
    * frames past its wall-clock cap and was SIGTERMed so the dump finalises.
+   *
+   * `"early-exit"` (0.5.7) is not the watchdog: Dolphin exited ON ITS OWN
+   * before printing a single frame — a crash or refusal at startup (bad ISO,
+   * no GL context, an AppImage without FUSE, a missing library). `stalled`
+   * stays false; `exitCode`/`exitSignal` and the tails say what happened.
+   * Before 0.5.7 that case resolved with `diagnostic: null`, like success.
    */
-  reason: "boot-stall" | "frame-stall" | "hard-timeout";
+  reason: "boot-stall" | "frame-stall" | "hard-timeout" | "early-exit";
+  /** How Dolphin exited. Set for `"early-exit"`; absent for the watchdog reasons (see the result's `exitCode`). */
+  exitCode?: number | null;
+  exitSignal?: NodeJS.Signals | null;
   /** Seconds without a `[CURRENT_FRAME]` when the watchdog fired. */
   silentForSec: number;
   /** True if it never emitted a single frame — a hung boot, not a freeze. */
@@ -586,7 +596,39 @@ export interface PlayOptions extends RunOptions {
   isRealTimeMode?: boolean;
 }
 
-export interface PlayResult {
+/**
+ * How the Dolphin process ended, on every `record()`/`play()` result (0.5.7).
+ *
+ * A run that reached its end frame was SIGTERMed by us, so `exitSignal` is
+ * usually "SIGTERM" (or `exitCode` 0/1 — Dolphin may catch it) on a perfectly
+ * good recording: these are for diagnosis, not a verdict. The verdict on an
+ * unexpected exit is `diagnostic.reason === "early-exit"`.
+ */
+export interface ExitInfo {
+  /** The exit code, or null when it was killed by a signal. */
+  exitCode: number | null;
+  /** The signal that ended it ("SIGTERM", "SIGKILL"), or null. Always null on Windows. */
+  exitSignal: NodeJS.Signals | null;
+  /** The last ~60 non-frame lines Dolphin printed on stdout (frame spam excluded). */
+  stdoutTail: string[];
+  /** The last ~60 lines of stderr. */
+  stderrTail: string[];
+}
+
+/**
+ * What `record()` rejects with when Dolphin left no `.avi` ("produced no
+ * video"). The message starts exactly as it always did, then adds how Dolphin
+ * exited and the last few stderr lines; the full tails are properties.
+ * Check with `(e as DolphinRunError).code === "no-video"`.
+ */
+export interface DolphinRunError extends Error, ExitInfo {
+  code: "no-video";
+  replay: string;
+  /** The watchdog's or early-exit's diagnostic, if one was taken. */
+  diagnostic: StallDiagnostic | null;
+}
+
+export interface PlayResult extends ExitInfo {
   /** The replay's last frame, however it was determined. */
   lastFrame: number;
   /** True if the watchdog fired — including a window the operator left open. */
@@ -597,7 +639,7 @@ export interface PlayResult {
   placement: PlacementReport | null;
 }
 
-export interface RecordResult {
+export interface RecordResult extends ExitInfo {
   avi: string;
   wav: string | null;
   /**
@@ -609,6 +651,10 @@ export interface RecordResult {
   stalled: boolean;
   /** True if your own `onFrame` returned `"stop"`. A clean, deliberate end. */
   stoppedEarly: boolean;
+  /**
+   * Set when the watchdog fired, or (0.5.7) when Dolphin exited by itself
+   * before its first frame (`reason: "early-exit"`). Null on a normal run.
+   */
   diagnostic: StallDiagnostic | null;
   /** How window placement went; null if none was asked for. */
   placement: PlacementReport | null;
