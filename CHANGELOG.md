@@ -6,9 +6,10 @@ failure mode this package exists to prevent.
 
 Until 1.0 the minor is the breaking digit: `0.x.0` may break, `0.x.y` never does.
 
-## Unreleased (hide-recording branch)
+## 0.5.8 — 2026-10-15
 
-Measured on the Windows rig (Windows 11, NVIDIA, Playback 3.5.2).
+Hidden recording. Measured on the Windows rig (Windows 11, NVIDIA, Playback 3.5.2)
+and on Linux (X11, GNOME).
 
 **May affect you**
 
@@ -28,6 +29,13 @@ Measured on the Windows rig (Windows 11, NVIDIA, Playback 3.5.2).
 
 **New**
 
+- **`hide` option for record mode** (`true | "window" | "desktop"`, or spread
+  `HIDDEN_RECORD` into both `buildProfile` and `record()`); `RecordResult.hide`
+  reports what it achieved. Windows: a hidden desktop via the bundled
+  `native/win/bin/lunar-hidden-launcher.exe` (`hideLauncherPath` to point at an
+  unpacked copy). Linux: parks the windows by pid on the last workspace (EWMH),
+  sway scratchpad or a Hyprland special workspace. macOS: an LSUIElement copy of
+  the app hidden by pid (unverified, no Mac yet). `placement.workspace` takes `"last"`.
 - "Produced no video" names the dump codec and quotes Dolphin's AVIDump log
   (`err.dumpCodec`, `err.dumpLog`); `dump-codec-fallback` warning when Dolphin
   swapped an unknown codec name for mpeg4.
