@@ -1,15 +1,18 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
 import { writeComm } from "./comm.ts";
 import { foldEnd, parseFrameLine, reachedEnd } from "./frames.ts";
-import { killTree } from "./kill.ts";
+import { killTree, pidTree } from "./kill.ts";
 import { checkPlacement, placeWindows, systemX11, warn, type PlacementHandle } from "./place.ts";
 import { resolveDolphinExecutable } from "./paths.ts";
 import { lastFrameOf } from "./slp.ts";
 import { dolphinStatus } from "./status.ts";
 import { tailBuffer } from "./tail.ts";
+import { compositorMoveArgs, planHide, type HidePlan, type HideReport } from "./hide.ts";
+import { loadWinNative, unavailableNative, type NativeHideResult } from "./win-native.ts";
+import { macHideByPidArgs } from "./mac-hide.ts";
 import type {
   DolphinPaths,
   DolphinRunError,
@@ -20,6 +23,7 @@ import type {
   RecordOptions,
   RecordResult,
   RunOptions,
+  RunnerWarning,
   StallDiagnostic,
 } from "./types.ts";
 
@@ -29,6 +33,8 @@ const DEFAULT_FRAME_STALL_MS = 30_000;
 interface SpawnPlan {
   args: string[];
   commPath: string;
+  /** Pass `windowsHide: true` to spawn, so the first ShowWindow is SW_HIDE. */
+  windowsHide?: boolean;
 }
 
 /**
@@ -116,7 +122,12 @@ async function runDolphin(
   return await new Promise((resolvePromise, reject) => {
     const env = recordEnv(process.env, o);
     // A macOS .app is a directory; spawn the executable inside it.
-    const child = spawn(resolveDolphinExecutable(paths.dolphinPath), plan.args, { env });
+    // windowsHide (set by `hide` on win32) makes the first ShowWindow SW_HIDE,
+    // so a RenderToMain Dolphin never shows a window or a taskbar button.
+    const child = spawn(resolveDolphinExecutable(paths.dolphinPath), plan.args, {
+      env,
+      ...(plan.windowsHide ? { windowsHide: true } : {}),
+    });
     // Hand the pid out as soon as there is one (window parking, diagnostics). A
     // throwing callback is the caller's bug, never a failed run.
     child.once("spawn", () => {
@@ -359,23 +370,35 @@ export async function record(
 
   const args = recordArgs(paths, { ...o, commPath, baseName: base });
 
-  const place = await preparePlacement(o, o.display);
+  // Hiding (`hide`) is per-OS. On Linux it may drive the window parking itself
+  // (by pid), so when the caller gave no explicit placement, use the one hide
+  // asks for; an explicit `placement` still wins.
+  const hide = createHideController(o, o.display);
+  const effPlacement = o.placement ?? hide?.placement;
+  const placeOpts = effPlacement ? { ...o, placement: effPlacement } : o;
+
+  const place = await preparePlacement(placeOpts, o.display);
   let placing: PlacementHandle | null = null;
+  hide?.beforeSpawn();
   const runOpts: RecordOptions = {
     ...o,
+    placement: effPlacement,
     onSpawn: (pid) => {
       // Placement first: the window must be found before it maps to never flash.
       if (place.start) placing = place.start(pid);
+      hide?.onSpawn(pid);
       o.onSpawn?.(pid);
     },
   };
   let out: RunOutcome;
   try {
-    out = await runDolphin(paths, slpPath, { args, commPath }, runOpts);
+    out = await runDolphin(paths, slpPath, { args, commPath, windowsHide: hide?.spawnHidden }, runOpts);
   } finally {
     (placing as PlacementHandle | null)?.stop();
+    hide?.cleanup();
   }
   const placement = placing ? await (placing as PlacementHandle).done : place.skipped;
+  const hideReport = hide ? await hide.finalize(placement) : null;
 
   const avi = path.join(o.outDir, `${base}.avi`);
   const wav = path.join(o.outDir, `${base}.wav`);
@@ -389,6 +412,7 @@ export async function record(
     stoppedEarly: out.stoppedEarly,
     diagnostic: out.diagnostic,
     placement,
+    hide: hideReport,
     exitCode: out.exitCode,
     exitSignal: out.exitSignal,
     stdoutTail: out.stdoutTail,
@@ -550,7 +574,9 @@ export async function preparePlacement(
   if (!check.ok) {
     if (p.required) throw new Error(`window placement required but unavailable: ${check.warning.detail}`);
     warn(o, check.warning);
-    return { start: null, skipped: { workspace: p.workspace, status: "skipped", windows: [] } };
+    // An unresolved "last" (no WM to count desktops) reports as -1.
+    const ws = typeof p.workspace === "number" ? p.workspace : -1;
+    return { start: null, skipped: { workspace: ws, status: "skipped", windows: [] } };
   }
   // Who has focus BEFORE Dolphin raises itself — restoreFocus hands it back.
   const previousActive = p.restoreFocus === false ? null : await systemX11(display).activeWindow();
@@ -558,4 +584,171 @@ export async function preparePlacement(
     start: (pid) => placeWindows(pid, { ...p, display, previousActive, signal: o.signal, onWarning: o.onWarning }),
     skipped: null,
   };
+}
+
+/** The runtime half of `hide`: spawn flag, per-OS hooks, and the report. */
+interface HideController {
+  /** Pass to spawn (win32 windowsHide). */
+  spawnHidden: boolean;
+  /** The placement to use when the caller gave none (Linux EWMH parking). */
+  placement: RunOptions["placement"] | undefined;
+  /** Just before spawn (Windows foreground lock). */
+  beforeSpawn(): void;
+  /** With the root pid (Windows QoS, macOS hide-by-pid, Linux compositor move). */
+  onSpawn(pid: number): void;
+  /** After the run (unschedule the foreground unlock timer). */
+  cleanup(): void;
+  /** Build the report once placement has finished. */
+  finalize(placement: PlacementReport | null): Promise<HideReport>;
+}
+
+/** The POSIX compositor-move / mac-hide shell runner. Injectable for tests. */
+export type HideExec = (cmd: string, args: string[]) => Promise<boolean>;
+
+const defaultHideExec: HideExec = (cmd, args) =>
+  new Promise((resolve) => {
+    try {
+      execFile(cmd, args, { timeout: 4000 }, (err) => resolve(!err));
+    } catch {
+      resolve(false);
+    }
+  });
+
+/** How long after spawn to release the Windows foreground lock (no first-frame hook). */
+const FOREGROUND_UNLOCK_MS = 5000;
+/** Linux compositor move: keep trying this long for both Dolphin windows to appear. */
+const COMPOSITOR_MOVE_MS = 3000;
+
+/**
+ * Build the hide controller for this run, or null when `hide` is off. Platform
+ * and env are injectable so the per-OS wiring is unit-testable off that OS.
+ */
+export function createHideController(
+  o: Pick<RunOptions, "hide" | "onWarning" | "signal" | "placement">,
+  display: string | undefined,
+  deps: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv; exec?: HideExec; loadNative?: typeof loadWinNative } = {},
+): HideController | null {
+  const platform = deps.platform ?? process.platform;
+  const env = deps.env ?? process.env;
+  const exec = deps.exec ?? defaultHideExec;
+  const plan = planHide(o.hide, platform, env);
+  if (!plan) return null;
+  for (const w of plan.warnings) warn(o, w);
+
+  const warnings: RunnerWarning[] = [...plan.warnings];
+  const addWarn = (w: RunnerWarning) => {
+    warnings.push(w);
+    warn(o, w);
+  };
+
+  let native: NativeHideResult | null = null;
+  let unlockTimer: ReturnType<typeof setTimeout> | null = null;
+  let nativeBackend: ReturnType<typeof loadWinNative> = null;
+  let macHiddenByPid: boolean | null = null;
+  let macPending: Promise<void> | null = null;
+  const compositorPids = new Set<number>();
+  let compositorPending: Promise<void> | null = null;
+
+  // Linux parking: synthesize a placement if the caller gave none.
+  const placement: RunOptions["placement"] | undefined =
+    plan.method === "linux-parking" && !o.placement
+      ? { workspace: plan.parkWorkspace ?? "last", restoreFocus: true, display }
+      : undefined;
+
+  function beforeSpawn(): void {
+    if (!plan!.wantNative) return;
+    const load = deps.loadNative ?? loadWinNative;
+    nativeBackend = load(platform);
+    if (!nativeBackend) {
+      native = unavailableNative();
+      addWarn({ code: "hide-native-unavailable", detail: native.detail });
+      return;
+    }
+    const locked = safeBool(() => nativeBackend!.lockForeground());
+    native = { available: true, qos: "skipped", foregroundLock: locked ? "locked" : "failed", detail: "koffi loaded" };
+    // No first-frame hook here; release after a short window (Windows also
+    // auto-unlocks on the next user input).
+    unlockTimer = setTimeout(() => safeBool(() => nativeBackend!.unlockForeground()), FOREGROUND_UNLOCK_MS);
+    unlockTimer.unref?.();
+  }
+
+  function onSpawn(pid: number): void {
+    if (plan!.wantNative && nativeBackend && native) {
+      const ok = safeBool(() => nativeBackend!.setHighQos(pid));
+      native = { ...native, qos: ok ? "high" : "failed" };
+    }
+    if (plan!.macAccessory) {
+      const { cmd, args } = macHideByPidArgs(pid);
+      macPending = exec(cmd, args).then((ok) => {
+        macHiddenByPid = ok;
+      });
+    }
+    if (plan!.compositorMove) {
+      compositorPending = runCompositorHide(plan!.compositorMove, pid, { exec, signal: o.signal, onMoved: (p) => compositorPids.add(p) });
+    }
+  }
+
+  function cleanup(): void {
+    if (unlockTimer) {
+      clearTimeout(unlockTimer);
+      // Make sure the lock is released even if the run was short.
+      if (nativeBackend) safeBool(() => nativeBackend!.unlockForeground());
+      unlockTimer = null;
+    }
+  }
+
+  async function finalize(parkReport: PlacementReport | null): Promise<HideReport> {
+    await Promise.allSettled([macPending, compositorPending].filter(Boolean) as Promise<unknown>[]);
+    return {
+      requested: o.hide as HideReport["requested"],
+      platform,
+      method: plan!.method,
+      verified: plan!.verified,
+      spawnHidden: plan!.spawnHidden,
+      profileApplied: null, // written by buildProfile, which record() does not call
+      parking: plan!.method === "linux-parking" ? parkReport : null,
+      compositor: plan!.compositorMove ? { kind: plan!.compositorMove, movedPids: [...compositorPids] } : null,
+      native,
+      mac: plan!.macAccessory ? { bundle: null, hiddenByPid: macHiddenByPid } : null,
+      warnings,
+    };
+  }
+
+  return { spawnHidden: plan.spawnHidden, placement, beforeSpawn, onSpawn, cleanup, finalize };
+}
+
+function safeBool(fn: () => boolean): boolean {
+  try {
+    return fn();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Move a Dolphin's XWayland windows out of sight through sway/Hyprland IPC, by
+ * pid. Dolphin's main and render windows map a little apart, so keep issuing the
+ * move for a short while and record which pids we moved.
+ */
+async function runCompositorHide(
+  kind: "sway" | "hyprland",
+  rootPid: number,
+  o: { exec: HideExec; signal?: AbortSignal; onMoved: (pid: number) => void },
+): Promise<void> {
+  const t0 = Date.now();
+  const moved = new Set<number>();
+  while (Date.now() - t0 < COMPOSITOR_MOVE_MS && !o.signal?.aborted) {
+    for (const pid of pidTree(rootPid)) {
+      if (moved.has(pid)) continue;
+      const { cmd, args } = compositorMoveArgs(kind, pid);
+      if (await o.exec(cmd, args)) {
+        moved.add(pid);
+        o.onMoved(pid);
+      }
+    }
+    await new Promise((r) => {
+      const t = setTimeout(r, 300);
+      (t as { unref?: () => void }).unref?.();
+    });
+  }
 }

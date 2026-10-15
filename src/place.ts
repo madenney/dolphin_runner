@@ -185,8 +185,9 @@ export async function checkPlacement(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<PlacementCheck> {
   const no = (code: RunnerWarning["code"], detail: string): PlacementCheck => ({ ok: false, warning: { code, detail } });
-  if (!Number.isInteger(o.workspace) || o.workspace < 0) {
-    return no("placement-unsupported", `workspace must be a 0-based integer, got ${o.workspace}`);
+  const last = o.workspace === "last";
+  if (!last && (!Number.isInteger(o.workspace) || (o.workspace as number) < 0)) {
+    return no("placement-unsupported", `workspace must be a 0-based integer or "last", got ${o.workspace}`);
   }
   if (platform !== "linux") return no("placement-unsupported", `window placement is Linux/X11 only (this is ${platform})`);
   if (!(o.display ?? env.DISPLAY)) return no("placement-unsupported", "no DISPLAY to place windows on");
@@ -204,7 +205,7 @@ export async function checkPlacement(
     // Xvfb and other bare displays: no window manager, and nobody looking.
     return no("placement-no-wm", "no EWMH window manager on this display — nothing to park, and nothing to hide from");
   }
-  if (o.workspace >= desktops) {
+  if (!last && (o.workspace as number) >= desktops) {
     return no("placement-no-workspace", `workspace ${o.workspace} does not exist (this display has ${desktops}, 0-based)`);
   }
   return { ok: true, desktops };
@@ -233,7 +234,9 @@ export function placeWindows(
   x: X11 = systemX11(o.display),
 ): PlacementHandle {
   const timeoutMs = o.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const ws = o.workspace;
+  // `"last"` (GNOME dynamic workspaces) is resolved to the trailing workspace
+  // on the first tick, once we can ask the WM how many there are.
+  let ws: number = typeof o.workspace === "number" ? o.workspace : -1;
   let wanted: Rect | null = null;
   let geometryResolved = false;
   const restoreFocus = o.restoreFocus !== false;
@@ -271,6 +274,11 @@ export function placeWindows(
     });
 
   async function tick() {
+    if (ws < 0) {
+      // Resolve `"last"` now: the trailing workspace (0-based desktops - 1).
+      const n = await x.wmDesktops().catch(() => null);
+      ws = n && n > 0 ? n - 1 : 0;
+    }
     if (Date.now() - treeAt > TREE_REFRESH_MS) {
       tree = x.pidTree(pid);
       treeAt = Date.now();
@@ -388,7 +396,9 @@ export function placeWindows(
       .filter((w) => w.mapped)
       .map((w) => ({ id: w.id, desktop: w.desktop }));
     const report: PlacementReport = {
-      workspace: ws,
+      // `ws` is still -1 only if the process died before the first tick; report
+      // the caller's number then (or 0 for an unresolved "last").
+      workspace: ws < 0 ? (typeof o.workspace === "number" ? o.workspace : 0) : ws,
       status: windows.length === 0 ? "none-found" : windows.every((w) => w.desktop === ws) ? "placed" : "partial",
       windows,
     };

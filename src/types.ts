@@ -1,4 +1,7 @@
 import type { Rect } from "./place.ts";
+import type { HideReport, HideTarget } from "./hide.ts";
+
+export type { HideTarget, HideReport, HidePlan, SessionInfo } from "./hide.ts";
 
 /** Where the two binaries this package drives actually live. */
 export interface DolphinPaths {
@@ -148,8 +151,25 @@ export interface ProfileOptions {
    * OBS captures BLACK. A blank value resolves to OGL on Linux (measured
    * 2026-10-08); set it anyway so a profile left on Vulkan can't win. These
    * are the only two on Linux — Playback has no software or null renderer.
+   *
+   * On Windows the Direct3D names are valid too (`"DX11"`, `"D3D12"`, `"DX9"`,
+   * the exact `GetName()` strings); `hide` pins `"DX11"` there unless you set
+   * one. A blank value resolves to DX11 on Windows, OGL on Linux.
    */
-  gfxBackend?: "OGL" | "Vulkan";
+  gfxBackend?: "OGL" | "Vulkan" | "DX11" | "D3D12" | "DX9";
+  /**
+   * Hide a RECORDING Dolphin: no window, no focus steal, no taskbar/Dock, with
+   * the dump as correct and fast as a visible run. Per-OS; see `HideTarget` and
+   * `record()`'s `hide` (set the SAME value on both — this writes the ini half,
+   * `record()` does the runtime half and reports the result). Record mode only.
+   */
+  hide?: HideTarget;
+  /**
+   * Override the platform `hide`'s ini is written for. Defaults to
+   * `process.platform`; exists so the per-OS ini selection is testable and so a
+   * cross-build tool can target another OS.
+   */
+  platform?: NodeJS.Platform;
   /**
    * `[Core] Latency` — audio buffer headroom in ms. MUST NOT be 0 for a live
    * feed: a cold launch stalls audio during ISO load + shader compile, the
@@ -253,14 +273,24 @@ export interface RunnerWarning {
     | "placement-no-wm" // no EWMH window manager (Xvfb): nothing to park
     | "placement-no-workspace" // that workspace doesn't exist on this display
     | "placement-ignored" // the WM left some window elsewhere after retries
-    | "placement-no-monitor"; // `monitor` named an output that isn't connected
+    | "placement-no-monitor" // `monitor` named an output that isn't connected
+    | "hide-unsupported" // hide asked for on an OS with no implementation
+    | "hide-desktop-fallback" // hide: "desktop" asked for off Windows
+    | "hide-session-unsupported" // a Wayland compositor we can't hide a window on (wlroots, etc.)
+    | "hide-native-unavailable" // Windows: koffi not installed, so QoS/foreground-lock skipped
+    | "hide-failed"; // a hide step threw; the recording still ran
   detail: string;
 }
 
 /** Park a Dolphin's windows on another workspace. See `placeWindows` (place.ts). */
 export interface PlacementOptions {
-  /** EWMH workspace, 0-BASED (GNOME's "Workspace 10" is 9). Never created — must exist. */
-  workspace: number;
+  /**
+   * EWMH workspace, 0-BASED (GNOME's "Workspace 10" is 9). Never created — must
+   * exist. `"last"` is the trailing workspace (`desktops - 1`), the right target
+   * for GNOME's DYNAMIC workspaces, where a fixed number may not exist yet and
+   * mutter keeps one empty workspace at the end.
+   */
+  workspace: number | "last";
   /**
    * Resize the window after the WM takes it, via EWMH `_NET_MOVERESIZE_WINDOW`.
    *
@@ -420,7 +450,18 @@ export interface RunOptions {
    * behaviour). See PlacementOptions; `display` defaults to this run's.
    */
   placement?: Omit<PlacementOptions, "display" | "signal" | "onWarning"> & { display?: string };
-  /** Non-fatal things the runner skipped or couldn't do (placement today). */
+  /**
+   * Hide this recording Dolphin: no window on screen, no focus steal, no
+   * taskbar/Dock, dumps unchanged. Per-OS (see `HideTarget`). Set the SAME
+   * value on `buildProfile` so the ini half is written too. The result carries
+   * a `HideReport` saying what each OS achieved.
+   *
+   * On Linux `hide` drives window parking itself (by pid, workspace `"last"` by
+   * default, or the compositor's IPC under sway/Hyprland), so you don't also
+   * pass `placement`; an explicit `placement` still wins if given.
+   */
+  hide?: HideTarget;
+  /** Non-fatal things the runner skipped or couldn't do (placement, hiding). */
   onWarning?: (w: RunnerWarning) => void;
   /**
    * The audio stream's `application.name` (PULSE_PROP_OVERRIDE; Pulse backend
@@ -658,4 +699,6 @@ export interface RecordResult extends ExitInfo {
   diagnostic: StallDiagnostic | null;
   /** How window placement went; null if none was asked for. */
   placement: PlacementReport | null;
+  /** How hiding went (`hide` on record()), per OS; null if none was asked for. */
+  hide: HideReport | null;
 }

@@ -102,6 +102,15 @@ test("the whole pid tree is searched — the AppImage execs, the window may be a
   assert.deepEqual(r.windows, [{ id: "300", desktop: 3 }]);
 });
 
+test('workspace "last" resolves to the trailing workspace (GNOME dynamic workspaces)', async () => {
+  const wins: Record<string, FakeWin> = { "100": { pid: 42, mapped: true, desktop: 0 } };
+  const { x } = fakeX(wins, { desktops: 4 }); // 0..3, "last" = 3
+  const r = await placeWindows(42, { workspace: "last", timeoutMs: 200 }, x).done;
+  assert.equal(r.status, "placed");
+  assert.deepEqual(r.windows, [{ id: "100", desktop: 3 }]);
+  assert.equal(r.workspace, 3);
+});
+
 test("pre-map first: a window found before the WM manages it gets the property, so it maps on the target", async () => {
   const wins: Record<string, FakeWin> = { "100": { pid: 42, mapped: false, desktop: null } };
   const { x, log } = fakeX(wins);

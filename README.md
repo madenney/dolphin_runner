@@ -93,6 +93,37 @@ const res = await record(paths, slp, {
 Mirror (OBS) audio is muted by ROUTING (`pulseSink`), never by volume or `silent`:
 OBS reads that sink's monitor. Why, with measurements: docs/background-and-mute.md.
 
+### Hiding a recording entirely (`hide`, per OS)
+
+`placement` parks a window on another workspace (Linux only). `hide` goes
+further — no window on screen, no focus steal, no taskbar/Dock — and does the
+right thing on **every** OS, with the dump as correct and as fast as a visible
+run (frame dumps come from an off-screen FBO). Set the SAME `hide` value on both
+`buildProfile` (the ini half) and `record()` (the runtime half), or spread the
+`HIDDEN_RECORD` preset into both:
+
+```ts
+import { HIDDEN_RECORD, buildProfile, record } from "slippi-dolphin-runner";
+
+await buildProfile(userDir, { ...HIDDEN_RECORD, mode: "record", efbScale: 4, dolphinPath });
+const res = await record(paths, slp, { ...HIDDEN_RECORD, userDir, outDir, display });
+// res.hide = { method, verified, spawnHidden, parking, compositor, native, mac, warnings }
+```
+
+`hide` can be `true` / `"window"` (the default per-OS hiding) or `"desktop"`
+(Windows-only separate-desktop launcher, experimental; falls back to `"window"`
+elsewhere with a warning). What each OS does:
+
+| OS | What `hide` does | Verified |
+|---|---|---|
+| **Linux** | Parks the Dolphin's windows by pid on workspace `"last"` (GNOME dynamic workspaces always have a trailing one); under sway/Hyprland it moves them by pid through `swaymsg … move scratchpad` / `hyprctl … movetoworkspacesilent special:…,pid:`; wlroots without EWMH is reported unsupported | **Yes** (X11/GNOME, here) |
+| **Windows** | Spawns `windowsHide: true` and forces a single hidden main window (`RenderToMain=True`, `Fullscreen=False`, small `MainWindow*`, `DisableScreenSaver=False`, `GFXBackend=DX11`). Optional native QoS opt-out + foreground lock if the host installs `koffi`. The graceful stop stays `taskkill /T` (WM_CLOSE → AVIDump finalises) | **No** — needs the Windows rig |
+| **macOS** | Forces OGL (occluded Vulkan/MoltenVK stalls), and hides the process by pid (`NSRunningApplication(pid).hide()` via JXA). `prepareMacRecorderApp()` builds a cached LSUIElement accessory copy (own bundle id, ad-hoc re-signed) to pass as `dolphinPath` — no Dock tile, no focus steal | **No** — needs a Mac |
+
+`res.hide.verified` is `false` on Windows and macOS: the recipe is written from
+Slippi's source and the OS docs but has not been run there. See
+docs/background-and-mute.md for the full per-OS reasoning and the test plans.
+
 ### A stall is not a failure
 
 `record()` resolves even when the watchdog fires, with `stalled: true` and a
@@ -240,7 +271,9 @@ that resolution — an Electron host whose `app.getPath('appData')` disagrees).
 | `keepWindowOnTop` | source | `[Display] KeepWindowOnTop` |
 | `detachHotkeys` | on in record mode | writes a `Hotkeys.ini` bound to no device, so a focus-stealing Dolphin can't eat keystrokes |
 | `window` | source | `{ fullscreen: true }` or `{ width, height, x?, y? }`. **Oversize windows become 640x480** — Dolphin's own clamp, not the WM's |
-| `gfxBackend` | source | `"OGL"` \| `"Vulkan"`. OGL is required for obs-vkcapture |
+| `gfxBackend` | source | `"OGL"` \| `"Vulkan"` (plus `"DX11"`/`"D3D12"`/`"DX9"` on Windows). OGL is required for obs-vkcapture; `hide` pins `"DX11"` on Windows unless you set one |
+| `hide` | off | hide a RECORDING window per OS: `true`/`"window"`, or `"desktop"` (Windows launcher, experimental). Record mode. Set the SAME value on `record()`. See "Hiding a recording entirely" |
+| `platform` | `process.platform` | override the OS `hide`'s ini is written for (testing / cross-build) |
 | `emulationSpeed` | source | `[Core] EmulationSpeed`; 1 = real time, 0 = unlimited |
 | `vsync`, `shaderCompilationMode`, `msaa` | source | GFX tuning |
 | `shaderCacheDir` | none | links `<userDir>/Cache` here (a symlink; a directory junction on Windows) so shaders survive a throwaway dir. **Per instance** — a shared cache corrupts |
@@ -270,7 +303,8 @@ is refused at `efbScale: 2`, which is 939 wide) and writes ~12 GB per 75 s game;
 | `env` | — | extra environment; the named options below win over it. The inherited environment is cleaned first: a parent AppImage's `APPDIR`/`APPIMAGE`/`ARGV0`/`OWD` are dropped and `$APPDIR` entries leave `PATH`/`LD_LIBRARY_PATH` (`stripAppImageEnv`) |
 | `audioSink` | — | sets `PULSE_SINK` **and** `PIPEWIRE_NODE` (the ALSA backend ignores the former) |
 | `appName` | — | `application.name` for the audio stream. WirePlumber remembers volume/mute **by that name**, and every Dolphin is otherwise `dolphin-emu` — hand-mute one and every future Dolphin starts muted |
-| `placement` | — | `{ workspace, required?, restoreFocus?, timeoutMs? }` — see below |
+| `placement` | — | `{ workspace, required?, restoreFocus?, timeoutMs? }` — see below. `workspace` is a 0-based number or `"last"` (the trailing workspace, for GNOME's dynamic workspaces) |
+| `hide` | — | hide this recording per OS (no window, no focus steal, no taskbar/Dock). `true`/`"window"`/`"desktop"`. On Linux it drives the parking itself (by pid), so you don't also pass `placement`. The result carries a `HideReport`. Set the SAME value on `buildProfile` |
 | `signal` | — | `AbortSignal`; aborting SIGKILLs the tree |
 | `onFrame` | — | `(current, end)`, record only. **Return `"stop"`** to end here and keep the footage: SIGTERM, resolves with `stoppedEarly: true`. Do not use an abort for that — an abort SIGKILLs (no `.avi` index) and rejects |
 | `onSpawn` | — | `(pid) => void`, once, as soon as there is a pid |
@@ -339,7 +373,10 @@ spawns Dolphin itself.
 | `parseFrameLine`, `reachedEnd`, `foldEnd` | the `--cout` rules, pure and unit-tested |
 | `setInSection`, `setEverywhere`, `getInSection` | the ini editor (`setInSection` creates a missing key *and* section) |
 | `resolveRealProfile`, `realProfileRoot`, `profileAt`, `appDataPath` | where a profile lives, per OS. macOS: the bundle's `Contents/Resources/User`, else `~/Library/Application Support/SlippiPlayback` |
-| `AUDIO_BACKENDS`, `NULL_AUDIO_BACKEND`, `BACKGROUND_RECORD`, `DEFAULT_GLCAPTURE_LIB` | constants |
+| `planHide`, `detectSession`, `hideDolphinIniDirectives`, `compositorMoveArgs`, `normalizeHide` | the pure `hide` logic (per-OS plan, Linux session detection, the ini each OS writes, the sway/Hyprland argv), all unit-tested |
+| `prepareMacRecorderApp`, `macRecorderBuildSteps`, `macHideByPidArgs` | macOS accessory-app build + pid hide (UNVERIFIED; pure parts tested) |
+| `loadWinNative` | lazily load the optional Windows QoS/foreground-lock backend (needs the host to have `koffi`); null otherwise |
+| `AUDIO_BACKENDS`, `NULL_AUDIO_BACKEND`, `BACKGROUND_RECORD`, `HIDDEN_RECORD`, `DEFAULT_GLCAPTURE_LIB` | constants |
 
 ## CLI (for non-Node consumers)
 

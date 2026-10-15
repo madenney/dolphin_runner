@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { getInSection, setEverywhere, setInSection } from "./ini.ts";
 import { resolveRealProfile, realProfileExists } from "./paths.ts";
+import { hideDolphinIniDirectives, normalizeHide } from "./hide.ts";
 import type { AudioBackend, ProfileOptions, RealProfile, TexturePack } from "./types.ts";
 
 /** Dump flags and the sections they live in. Both sections matter for audio. */
@@ -46,6 +47,24 @@ export const BACKGROUND_RECORD = {
   keepWindowOnTop: false,
   vsync: false,
   window: { width: 640, height: 360 },
+} as const satisfies Partial<ProfileOptions>;
+
+/**
+ * `BACKGROUND_RECORD` plus `hide: true` — the recording stays off the user's
+ * screen entirely, per OS (see `HideTarget` / `record()`'s `hide`). Spread it
+ * into BOTH `buildProfile` and the `record()` call, exactly as the value of
+ * `hide` must match in both places:
+ *
+ *   await buildProfile(dir, { ...HIDDEN_RECORD, mode: "record", efbScale: 4 });
+ *   await record(paths, slp, { ...HIDDEN_RECORD, userDir: dir, outDir, display });
+ *
+ * `buildProfile` reads `hide`/`window`/`pauseOnFocusLost` from it; `record()`
+ * reads `hide` (and ignores the profile-only keys). Like `BACKGROUND_RECORD` it
+ * leaves out `silent`/`emulationSpeed` — those are the consumer's call.
+ */
+export const HIDDEN_RECORD = {
+  ...BACKGROUND_RECORD,
+  hide: true,
 } as const satisfies Partial<ProfileOptions>;
 
 /**
@@ -202,6 +221,18 @@ export async function buildProfile(userDir: string, opts: ProfileOptions & { dol
       dol = setInSection(dol, "Display", "RenderWindowHeight", String(w.height));
       if (w.x != null) dol = setInSection(dol, "Display", "RenderWindowXPos", String(w.x));
       if (w.y != null) dol = setInSection(dol, "Display", "RenderWindowYPos", String(w.y));
+    }
+    // Hiding the recording window, per OS (record mode only). Windows forces a
+    // single hidden main window (RenderToMain + small MainWindow* +
+    // DisableScreenSaver off + DX11); macOS forces OGL (occluded Vulkan stalls);
+    // Linux needs none here (the window is parked at runtime, not reshaped).
+    // All of these CREATE their keys. GFXBackend is only pinned when the caller
+    // didn't choose a backend. The runtime half is in run.ts (`hide`).
+    if (recording && normalizeHide(opts.hide)) {
+      const platform = opts.platform ?? process.platform;
+      for (const d of hideDolphinIniDirectives(platform, { hasGfxBackend: opts.gfxBackend != null })) {
+        dol = setInSection(dol, d.section, d.key, d.value);
+      }
     }
     await fsp.writeFile(path.join(destConfig, "Dolphin.ini"), dol);
   }

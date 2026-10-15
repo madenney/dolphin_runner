@@ -531,3 +531,94 @@ Still open, outside the runner:
   --disable-shutdown-check --collection drtest --profile drtest"`. Pre-seed `global.ini`
   `[Locations]`, because the real one hardcodes absolute paths. Put the websocket on a
   non-4455 port. Back up and checksum the real config first.
+
+---
+
+## Hiding a recording on every OS: the `hide` option (built 2026-10-14)
+
+`placement` only parks an X11 window. `hide` is the cross-OS version — no window
+on screen, no focus steal, no taskbar/Dock — set on both `buildProfile` (ini
+half) and `record()` (runtime half), reported on `RecordResult.hide`. Dumps are
+unchanged because `InternalResolutionFrameDumps=True` reads from an off-screen
+FBO (measured on Linux; the same code path on Windows/macOS). `hide: true` is the
+default per-OS method; `hide: "desktop"` selects the experimental Windows
+separate-desktop launcher.
+
+### Linux — implemented AND verified here (X11/GNOME)
+
+- EWMH window parking by pid, defaulting to workspace `"last"` (the trailing
+  workspace, so GNOME's dynamic workspaces always have a target; a fixed number
+  can fail with `placement-no-workspace`).
+- Session-aware dispatch (`detectSession`): GNOME/KDE on X11 or XWayland →
+  EWMH parking; **sway** → `swaymsg '[pid=N] move scratchpad'`; **Hyprland** →
+  `hyprctl dispatch movetoworkspacesilent special:lunar,pid:N`; wlroots/other
+  Wayland with no known IPC → a `hide-session-unsupported` warning (honest, not
+  a silent fail). Everything is by pid, never by title (the project rule).
+- Verified end to end on this box: see "Verified here" below.
+
+### Windows — implemented, UNVERIFIED (needs the Windows rig)
+
+Ship-first recipe (A in the research), all written, none run on Windows:
+
+- `buildProfile` writes, in record mode, for win32: `[Display] RenderToMain=True`,
+  `Fullscreen=False`, `DisableScreenSaver=False`; `[Interface] MainWindow{Width,
+  Height,PosX,PosY}` small; `[Core] GFXBackend=DX11` (unless the caller set a
+  backend). RenderToMain is the Windows/macOS Playback default and is what makes
+  one hidden window cover everything; the `MainWindow*` keys (not `RenderWindow*`)
+  are the backbuffer size under it. The `GetName()` backend strings are exactly
+  `DX11`/`D3D12`/`DX9`/`OGL`/`Vulkan` (read in Ishiiruka `slippi`); the
+  `gfxBackend` type was widened to include them.
+- `record()` spawns with `windowsHide: true`, so the first `ShowWindow` on
+  `CFrame` is `SW_HIDE`: no window, no taskbar button.
+- Optional native opt-outs (`win-native.ts`), loaded lazily and only if the host
+  app installs `koffi` (this package keeps `dependencies = {}`): HighQoS
+  (`SetProcessInformation` / `ProcessPowerThrottling`, so a hidden+muted Dolphin
+  isn't dropped to E-cores) and `LockSetForegroundWindow` around the spawn (so a
+  hidden Dolphin can't take keyboard focus while the parent app is foreground).
+  Without koffi they are clean no-ops with a `hide-native-unavailable` warning;
+  hiding still works.
+- The graceful stop is unchanged: `taskkill /T` without `/F` posts WM_CLOSE and
+  AVIDump finalises the `.avi` (relies on `ConfirmStop=False`, already forced).
+- `hide: "desktop"` is the experimental separate-desktop launcher
+  (`native/win/hidden_launcher.c`: CreateDesktop + `STARTUPINFO.lpDesktop`,
+  stdio passthrough, a Job object with KILL_ON_JOB_CLOSE, HighQoS, and a `CLOSE`
+  stdin command that posts WM_CLOSE to its windows on that desktop). No
+  cross-compiler was available here, so it is **not built**; build with
+  `native/win/build.sh` (mingw-w64) or `build.bat` (MSVC), sign it with the
+  installer's certificate, and keep the hash stable (AV reputation). The runner
+  marks the method `windows-desktop` and `verified:false`; spawning *through* the
+  launcher is the remaining wiring for the Windows rig.
+- **For the Windows rig:** confirm no visible window from t=0 (the SW_HIDE hits
+  `CFrame`), focus never moves (with and without the LSFW lock), 0 taskbar
+  buttons, every `.avi` indexed with **0** `/F` escalations, and speed within ~5%
+  of visible with HighQoS (grid: A vs B, with/without HighQoS, DX11, 1 and 4
+  parallel). The VirtualBox Win10 VM covers functional checks; GPU/speed needs
+  real NVIDIA/AMD/Intel incl. a 12th-gen hybrid on battery.
+
+### macOS — implemented, UNVERIFIED (needs a Mac)
+
+- `buildProfile` forces `GFXBackend=OGL` in record mode (occluded
+  Vulkan/MoltenVK drops to ~1 FPS; OpenGL does not and dumps from the FBO).
+- `record()` hides the process by pid with `NSRunningApplication(pid).hide()`
+  via `osascript -l JavaScript` (no TCC prompt; by pid, never by name).
+- `prepareMacRecorderApp()` builds a cached **accessory** copy of the Playback
+  app (ditto/clone, strip quarantine, `LSUIElement=YES`, own `CFBundleIdentifier`,
+  ad-hoc re-sign with the original entitlements), keyed on the source app's
+  version + mtime (rebuilt on a Slippi update). An accessory app has no Dock
+  tile, no menu bar, no Cmd-Tab and is not activated at launch. The consumer
+  passes `result.app` as `dolphinPath`; on any failure it returns the original
+  app and the recording still runs (visible). The build steps, cache key and
+  hide argv are unit-tested; nothing ran on a Mac.
+- **For a Mac:** verify a copied+re-signed accessory bundle honours `--user` and
+  `--cout`, that `hide()` on a direct-spawned instance hides its window, that
+  dumps stay byte-identical (OGL, occluded/minimised), and the focus/Dock/visible
+  checks (`CGWindowListCopyWindowInfo`, `lsappinfo`, `NSWorkspace.frontmost`).
+
+### Verified here (Linux, this box)
+
+See the run under "Smoke / E2E" in this repo's test notes: `hide: true` produced
+a correct dump with **no Dolphin window on the current workspace** and **focus
+kept**, parked on the trailing workspace by pid. All 209 unit tests pass,
+including 29 new `hide` tests (per-OS ini, session detection, the controller with
+injected platform/env/exec/native, the compositor/mac/win argv, and the report)
+plus a placement "last" test.
