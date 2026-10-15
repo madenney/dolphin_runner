@@ -19,6 +19,9 @@ export {
   detectSession,
   hideDolphinIniDirectives,
   compositorMoveArgs,
+  resolveHideLauncher,
+  bundledHideLauncher,
+  HIDE_LAUNCHER_EXE,
 } from "./hide.ts";
 export type { HideTarget, HideReport, HidePlan, SessionInfo, IniDirective } from "./hide.ts";
 export { loadWinNative, unavailableNative } from "./win-native.ts";

@@ -14,3 +14,4 @@ scratch/
 # Internal migration bookkeeping: maps private consumer repos by file and line.
 docs/local/
 native/win/dist/
+native/win/bin/*.pdb

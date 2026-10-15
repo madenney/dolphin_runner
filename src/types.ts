@@ -276,6 +276,7 @@ export interface RunnerWarning {
     | "placement-no-monitor" // `monitor` named an output that isn't connected
     | "hide-unsupported" // hide asked for on an OS with no implementation
     | "hide-desktop-fallback" // hide: "desktop" asked for off Windows
+    | "hide-desktop-unavailable" // Windows: no lunar-hidden-launcher.exe found; hid the window instead
     | "hide-session-unsupported" // a Wayland compositor we can't hide a window on (wlroots, etc.)
     | "hide-native-unavailable" // Windows: koffi not installed, so QoS/foreground-lock skipped
     | "hide-failed"; // a hide step threw; the recording still ran
@@ -461,6 +462,16 @@ export interface RunOptions {
    * pass `placement`; an explicit `placement` still wins if given.
    */
   hide?: HideTarget;
+  /**
+   * Windows, `hide: "desktop"` only: the `lunar-hidden-launcher.exe` to spawn
+   * Dolphin through (it runs Dolphin on its own never-shown desktop). Default:
+   * `DOLPHIN_RUNNER_HIDE_LAUNCHER`, then the copy this package ships in
+   * `native/win/bin/`. A host app that signs its own copy passes that path (an
+   * Electron app must point at an unpacked file: an exe inside an asar can't run).
+   * When none exists the run falls back to `hide: "window"` with a
+   * `hide-desktop-unavailable` warning.
+   */
+  hideLauncherPath?: string;
   /** Non-fatal things the runner skipped or couldn't do (placement, hiding). */
   onWarning?: (w: RunnerWarning) => void;
   /**

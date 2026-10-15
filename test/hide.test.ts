@@ -19,6 +19,9 @@ import {
   detectSession,
   hideDolphinIniDirectives,
   compositorMoveArgs,
+  resolveHideLauncher,
+  bundledHideLauncher,
+  nextHideDesktopName,
 } from "../src/hide.ts";
 import { createHideController } from "../src/run.ts";
 import { loadWinNative, unavailableNative, _resetWinNativeCache, type WinNativeBackend } from "../src/win-native.ts";
@@ -136,10 +139,73 @@ test("planHide Windows: hidden window, spawn hidden, native wanted, unverified",
   assert.equal(p.verified, false);
 });
 
-test("planHide Windows desktop: the experimental launcher", () => {
+test("planHide Windows desktop: the launcher, and no koffi calls (it does QoS itself)", () => {
   const p = planHide("desktop", "win32", {})!;
   assert.equal(p.method, "windows-desktop");
   assert.equal(p.useDesktopLauncher, true);
+  assert.equal(p.wantNative, false);
+});
+
+// --- the desktop launcher ----------------------------------------------------
+
+test("resolveHideLauncher: explicit, then env, then bundled; null when none exists", () => {
+  const have = new Set(["C:/a.exe", "C:/env.exe", "C:/bundled.exe"]);
+  const exists = (p: string) => have.has(p);
+  const env = { DOLPHIN_RUNNER_HIDE_LAUNCHER: "C:/env.exe" };
+  assert.equal(resolveHideLauncher("C:/a.exe", env, exists, "C:/bundled.exe"), "C:/a.exe");
+  assert.equal(resolveHideLauncher("C:/missing.exe", env, exists, "C:/bundled.exe"), "C:/env.exe");
+  assert.equal(resolveHideLauncher(undefined, {}, exists, "C:/bundled.exe"), "C:/bundled.exe");
+  assert.equal(resolveHideLauncher(undefined, {}, () => false, "C:/bundled.exe"), null);
+});
+
+test("the bundled launcher path is <package>/native/win/bin/lunar-hidden-launcher.exe", () => {
+  const p = bundledHideLauncher();
+  assert.equal(path.basename(p), "lunar-hidden-launcher.exe");
+  assert.equal(path.basename(path.dirname(p)), "bin");
+  assert.equal(path.resolve(p, "..", "..", "..", ".."), path.resolve(import.meta.dirname, ".."));
+});
+
+test("desktop names are unique per run", () => {
+  const a = nextHideDesktopName(42);
+  const b = nextHideDesktopName(42);
+  assert.match(a, /^LunarRec-42-\d+$/);
+  assert.notEqual(a, b);
+});
+
+test("controller Windows desktop: spawns through the launcher on its own desktop", async () => {
+  const c = createHideController({ hide: "desktop", hideLauncherPath: "C:/l.exe" }, undefined, {
+    platform: "win32",
+    env: {},
+    findLauncher: (explicit) => explicit ?? null,
+    loadNative: () => {
+      throw new Error("desktop mode must not load koffi");
+    },
+  })!;
+  assert.equal(c.desktop?.launcher, "C:/l.exe");
+  assert.match(c.desktop!.name, /^LunarRec-\d+-\d+$/);
+  c.beforeSpawn();
+  c.onSpawn(7);
+  const r = await c.finalize(null);
+  assert.equal(r.method, "windows-desktop");
+  assert.deepEqual(r.desktop, { launcher: "C:/l.exe", name: c.desktop!.name });
+  assert.equal(r.native, null);
+});
+
+test("controller Windows desktop without a launcher: hidden window instead, with a warning", async () => {
+  const warnings: string[] = [];
+  const c = createHideController({ hide: "desktop", onWarning: (w) => warnings.push(w.code) }, undefined, {
+    platform: "win32",
+    env: {},
+    findLauncher: () => null,
+    loadNative: () => null,
+  })!;
+  assert.equal(c.desktop, null);
+  assert.equal(c.spawnHidden, true);
+  c.beforeSpawn();
+  const r = await c.finalize(null);
+  assert.equal(r.method, "windows-hidden-window");
+  assert.deepEqual(r.desktop, { launcher: null, name: null });
+  assert.ok(warnings.includes("hide-desktop-unavailable"));
 });
 
 test("planHide macOS: accessory app, unverified, and desktop falls back with a warning", () => {

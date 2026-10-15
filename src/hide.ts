@@ -26,6 +26,8 @@
  *   app (LSUIElement, own bundle id, ad-hoc re-signed), force OGL, and hide the
  *   process by pid (mac-hide.ts). Falls back to the original app + hide helper.
  */
+import { existsSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type { NativeHideResult } from "./win-native.ts";
 import type { PlacementReport, RunnerWarning } from "./types.ts";
 
@@ -193,7 +195,9 @@ export function planHide(
       ...base,
       method: target === "desktop" ? "windows-desktop" : "windows-hidden-window",
       spawnHidden: true,
-      wantNative: true,
+      // The desktop launcher sets HighQoS on Dolphin itself, and a Dolphin on
+      // another desktop cannot take the foreground: no koffi calls needed.
+      wantNative: target !== "desktop",
       useDesktopLauncher: target === "desktop",
       verified: false,
     };
@@ -270,5 +274,44 @@ export interface HideReport {
   native: NativeHideResult | null;
   /** macOS accessory-app + hide-by-pid result, if attempted. */
   mac: { bundle: string | null; hiddenByPid: boolean | null } | null;
+  /**
+   * Windows `hide: "desktop"`: the launcher spawned and the desktop it was told
+   * to create. `launcher: null` means none was found and the run fell back to
+   * the hidden window (`method` then reads `windows-hidden-window`).
+   */
+  desktop: { launcher: string | null; name: string | null } | null;
   warnings: RunnerWarning[];
+}
+
+/** The launcher's file name, as shipped in `native/win/bin/`. */
+export const HIDE_LAUNCHER_EXE = "lunar-hidden-launcher.exe";
+
+/** Where this package keeps its prebuilt launcher (`<pkg>/native/win/bin/`). */
+export function bundledHideLauncher(): string {
+  // src/hide.ts and dist/hide.js are both one level below the package root.
+  return fileURLToPath(new URL(`../native/win/bin/${HIDE_LAUNCHER_EXE}`, import.meta.url));
+}
+
+/**
+ * The launcher `hide: "desktop"` spawns through, or null when there is none:
+ * the explicit option, then `DOLPHIN_RUNNER_HIDE_LAUNCHER`, then the bundled
+ * copy. Pure apart from `exists` (injectable for tests).
+ */
+export function resolveHideLauncher(
+  explicit: string | undefined,
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (p: string) => boolean = existsSync,
+  bundled: string = bundledHideLauncher(),
+): string | null {
+  for (const p of [explicit, env.DOLPHIN_RUNNER_HIDE_LAUNCHER, bundled]) {
+    if (p && exists(p)) return p;
+  }
+  return null;
+}
+
+let desktopSeq = 0;
+/** A desktop name unique to this process and run: `LunarRec-<pid>-<n>`. */
+export function nextHideDesktopName(pid: number = process.pid): string {
+  desktopSeq += 1;
+  return `LunarRec-${pid}-${desktopSeq}`;
 }

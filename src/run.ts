@@ -10,7 +10,15 @@ import { resolveDolphinExecutable } from "./paths.ts";
 import { lastFrameOf } from "./slp.ts";
 import { dolphinStatus } from "./status.ts";
 import { tailBuffer } from "./tail.ts";
-import { compositorMoveArgs, planHide, type HidePlan, type HideReport } from "./hide.ts";
+import {
+  compositorMoveArgs,
+  HIDE_LAUNCHER_EXE,
+  nextHideDesktopName,
+  planHide,
+  resolveHideLauncher,
+  type HidePlan,
+  type HideReport,
+} from "./hide.ts";
 import { loadWinNative, unavailableNative, type NativeHideResult } from "./win-native.ts";
 import { macHideByPidArgs } from "./mac-hide.ts";
 import type {
@@ -35,6 +43,11 @@ interface SpawnPlan {
   commPath: string;
   /** Pass `windowsHide: true` to spawn, so the first ShowWindow is SW_HIDE. */
   windowsHide?: boolean;
+  /**
+   * Windows `hide: "desktop"`: spawn this launcher with Dolphin's exe as its
+   * first argument; it starts Dolphin on its own desktop (native/win/).
+   */
+  launcher?: string;
 }
 
 /**
@@ -124,10 +137,16 @@ async function runDolphin(
     // A macOS .app is a directory; spawn the executable inside it.
     // windowsHide (set by `hide` on win32) makes the first ShowWindow SW_HIDE,
     // so a RenderToMain Dolphin never shows a window or a taskbar button.
-    const child = spawn(resolveDolphinExecutable(paths.dolphinPath), plan.args, {
-      env,
-      ...(plan.windowsHide ? { windowsHide: true } : {}),
-    });
+    const exe = resolveDolphinExecutable(paths.dolphinPath);
+    // Through the desktop launcher, Dolphin is the launcher's child: its pid is
+    // the launcher's, `taskkill /T` reaches both, and the launcher relays the
+    // polite WM_CLOSE to Dolphin's windows on the hidden desktop.
+    const child = plan.launcher
+      ? spawn(plan.launcher, [exe, ...plan.args], { env, windowsHide: true })
+      : spawn(exe, plan.args, {
+          env,
+          ...(plan.windowsHide ? { windowsHide: true } : {}),
+        });
     // Hand the pid out as soon as there is one (window parking, diagnostics). A
     // throwing callback is the caller's bug, never a failed run.
     child.once("spawn", () => {
@@ -390,9 +409,19 @@ export async function record(
       o.onSpawn?.(pid);
     },
   };
+  if (hide?.desktop) {
+    // The launcher names its desktop from the environment; a caller's own
+    // LUNAR_HIDDEN_DESKTOP (in `env`) wins.
+    runOpts.env = { LUNAR_HIDDEN_DESKTOP: hide.desktop.name, ...(o.env ?? {}) };
+  }
   let out: RunOutcome;
   try {
-    out = await runDolphin(paths, slpPath, { args, commPath, windowsHide: hide?.spawnHidden }, runOpts);
+    out = await runDolphin(
+      paths,
+      slpPath,
+      { args, commPath, windowsHide: hide?.spawnHidden, launcher: hide?.desktop?.launcher },
+      runOpts,
+    );
   } finally {
     (placing as PlacementHandle | null)?.stop();
     hide?.cleanup();
@@ -590,6 +619,8 @@ export async function preparePlacement(
 interface HideController {
   /** Pass to spawn (win32 windowsHide). */
   spawnHidden: boolean;
+  /** Windows `hide: "desktop"` with a launcher found: spawn through it. */
+  desktop: { launcher: string; name: string } | null;
   /** The placement to use when the caller gave none (Linux EWMH parking). */
   placement: RunOptions["placement"] | undefined;
   /** Just before spawn (Windows foreground lock). */
@@ -624,14 +655,21 @@ const COMPOSITOR_MOVE_MS = 3000;
  * and env are injectable so the per-OS wiring is unit-testable off that OS.
  */
 export function createHideController(
-  o: Pick<RunOptions, "hide" | "onWarning" | "signal" | "placement">,
+  o: Pick<RunOptions, "hide" | "onWarning" | "signal" | "placement" | "hideLauncherPath">,
   display: string | undefined,
-  deps: { platform?: NodeJS.Platform; env?: NodeJS.ProcessEnv; exec?: HideExec; loadNative?: typeof loadWinNative } = {},
+  deps: {
+    platform?: NodeJS.Platform;
+    env?: NodeJS.ProcessEnv;
+    exec?: HideExec;
+    loadNative?: typeof loadWinNative;
+    /** Find the desktop launcher (default: resolveHideLauncher). */
+    findLauncher?: (explicit: string | undefined, env: NodeJS.ProcessEnv) => string | null;
+  } = {},
 ): HideController | null {
   const platform = deps.platform ?? process.platform;
   const env = deps.env ?? process.env;
   const exec = deps.exec ?? defaultHideExec;
-  const plan = planHide(o.hide, platform, env);
+  let plan = planHide(o.hide, platform, env);
   if (!plan) return null;
   for (const w of plan.warnings) warn(o, w);
 
@@ -640,6 +678,25 @@ export function createHideController(
     warnings.push(w);
     warn(o, w);
   };
+
+  // Windows "desktop": spawn through the launcher if there is one; otherwise
+  // the plain hidden window (still no window or taskbar button), said aloud.
+  let desktop: { launcher: string; name: string } | null = null;
+  let desktopReport: HideReport["desktop"] = null;
+  if (plan.useDesktopLauncher) {
+    const launcher = (deps.findLauncher ?? resolveHideLauncher)(o.hideLauncherPath, env);
+    if (launcher) {
+      desktop = { launcher, name: nextHideDesktopName() };
+      desktopReport = { ...desktop };
+    } else {
+      desktopReport = { launcher: null, name: null };
+      plan = { ...plan, method: "windows-hidden-window", useDesktopLauncher: false, wantNative: true };
+      addWarn({
+        code: "hide-desktop-unavailable",
+        detail: `no ${HIDE_LAUNCHER_EXE} (hideLauncherPath, DOLPHIN_RUNNER_HIDE_LAUNCHER or the bundled copy); hiding the window instead`,
+      });
+    }
+  }
 
   let native: NativeHideResult | null = null;
   let unlockTimer: ReturnType<typeof setTimeout> | null = null;
@@ -710,11 +767,12 @@ export function createHideController(
       compositor: plan!.compositorMove ? { kind: plan!.compositorMove, movedPids: [...compositorPids] } : null,
       native,
       mac: plan!.macAccessory ? { bundle: null, hiddenByPid: macHiddenByPid } : null,
+      desktop: desktopReport,
       warnings,
     };
   }
 
-  return { spawnHidden: plan.spawnHidden, placement, beforeSpawn, onSpawn, cleanup, finalize };
+  return { spawnHidden: plan.spawnHidden, desktop, placement, beforeSpawn, onSpawn, cleanup, finalize };
 }
 
 function safeBool(fn: () => boolean): boolean {
