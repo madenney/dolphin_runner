@@ -9,6 +9,7 @@ export {
   APPIMAGE_RUNTIME_VARS,
   statusContext,
   noVideoError,
+  defaultStopGraceMs,
 } from "./run.ts";
 export { placeWindows, checkPlacement, systemX11 } from "./place.ts";
 export type { X11, PlacementHandle, PlacementCheck, Rect, Monitor } from "./place.ts";
@@ -65,6 +66,18 @@ export type { CommFile, MirrorCommFile } from "./comm.ts";
 export { parseFrameLine, reachedEnd, foldEnd } from "./frames.ts";
 export type { FrameLine } from "./frames.ts";
 export { setInSection, setEverywhere, getInSection } from "./ini.ts";
+export {
+  readDumpSettings,
+  dumpSettingsFromGfx,
+  readDumpLog,
+  dumpLogLines,
+  describeDumpFailure,
+  encoderRefused,
+  codecFellBack,
+  repairWavHeader,
+  DUMP_LOG_INI,
+} from "./dumplog.ts";
+export type { DumpSettings } from "./dumplog.ts";
 export type {
   DolphinPaths,
   RealProfile,

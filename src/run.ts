@@ -8,6 +8,7 @@ import { killTree, pidTree } from "./kill.ts";
 import { checkPlacement, placeWindows, systemX11, warn, type PlacementHandle } from "./place.ts";
 import { resolveDolphinExecutable } from "./paths.ts";
 import { lastFrameOf } from "./slp.ts";
+import { codecFellBack, describeDumpFailure, readDumpLog, readDumpSettings, repairWavHeader, type DumpSettings } from "./dumplog.ts";
 import { dolphinStatus } from "./status.ts";
 import { tailBuffer } from "./tail.ts";
 import {
@@ -37,6 +38,11 @@ import type {
 
 const DEFAULT_BOOT_STALL_MS = 90_000;
 const DEFAULT_FRAME_STALL_MS = 30_000;
+
+/** `RunOptions.stopGraceMs` default per OS. Pure, for tests. */
+export function defaultStopGraceMs(platform: NodeJS.Platform = process.platform): number {
+  return platform === "win32" ? 15_000 : 5_000;
+}
 
 interface SpawnPlan {
   args: string[];
@@ -113,6 +119,8 @@ export function appNameProp(name: string): string {
 
 /** What runDolphin hands back to record()/play(). */
 interface RunOutcome extends ExitInfo {
+  /** A graceful stop ran out of `stopGraceMs` and was forced. */
+  forcedStop: boolean;
   stalled: boolean;
   diagnostic: StallDiagnostic | null;
   stoppedEarly: boolean;
@@ -130,6 +138,7 @@ async function runDolphin(
 ): Promise<RunOutcome> {
   const bootStallMs = o.bootStallMs ?? DEFAULT_BOOT_STALL_MS;
   const frameStallMs = o.frameStallMs ?? DEFAULT_FRAME_STALL_MS;
+  const stopGraceMs = o.stopGraceMs ?? defaultStopGraceMs();
   const startedAt = Date.now();
 
   return await new Promise((resolvePromise, reject) => {
@@ -163,6 +172,8 @@ async function runDolphin(
     let settled = false;
     let stalled = false;
     let stoppedEarly = false;
+    let forcedStop = false;
+    const gracefulKill = () => killTree(child.pid!, true, stopGraceMs, { onForce: () => (forcedStop = true) });
     let diagnostic: StallDiagnostic | null = null;
     let stderrBytes = 0;
     let lastProgress = Date.now();
@@ -211,7 +222,7 @@ async function runDolphin(
         stalled = true;
         diagnostic = snapshot("hard-timeout");
         // SIGTERM, not SIGKILL: we want the .avi index written.
-        killTree(child.pid!, true);
+        gracefulKill();
         return;
       }
       const window = sawAnyFrame ? frameStallMs : bootStallMs;
@@ -268,7 +279,7 @@ async function runDolphin(
       if (!killedAtEnd && want === "stop") {
         killedAtEnd = true;
         stoppedEarly = true;
-        killTree(child.pid!, true);
+        gracefulKill();
         return;
       }
       // COMPARE NUMERICALLY, >= not == and never as a substring. A substring
@@ -279,7 +290,7 @@ async function runDolphin(
         killedAtEnd = true;
         // SIGTERM so the .avi/.wav finalise; a dump killed with SIGKILL can be
         // left without a usable index.
-        killTree(child.pid!, true);
+        gracefulKill();
       }
     });
 
@@ -327,7 +338,7 @@ async function runDolphin(
         // every sense except announcing it, and rejecting here throws away work
         // that already cost its full real-time record. Resolve, report `stalled`,
         // and let the caller's duration guard judge the footage.
-        resolvePromise({ stalled, diagnostic, stoppedEarly, ...exit });
+        resolvePromise({ stalled, diagnostic, stoppedEarly, forcedStop, ...exit });
       };
       if (openStreams === 0) return done();
       // The exit event can beat the last chunk of stderr — which is the chunk
@@ -431,11 +442,28 @@ export async function record(
 
   const avi = path.join(o.outDir, `${base}.avi`);
   const wav = path.join(o.outDir, `${base}.wav`);
-  if (!existsSync(avi)) throw noVideoError(slpPath, out);
+  // Dolphin only says why a dump failed (or fell back) in its log.
+  const dumpLog = readDumpLog(o.userDir);
+  if (!existsSync(avi)) throw noVideoError(slpPath, out, { dump: readDumpSettings(o.userDir), log: dumpLog });
+  if (codecFellBack(dumpLog)) {
+    const dump = readDumpSettings(o.userDir);
+    warn(o, {
+      code: "dump-codec-fallback",
+      detail: `Dolphin does not know the dump codec ${JSON.stringify(dump?.codec ?? "?")} and dumped its default (mpeg4) instead: ${dumpLog.find((l) => /Invalid codec/i.test(l))}`,
+    });
+  }
 
+  // A forced stop (or a crash after the dump) can leave the WAV's RIFF/data
+  // sizes unwritten: Dolphin finalises the WAV only after its video backend
+  // has shut down, which took 8-14 s with 4 parallel Dolphins on the Windows
+  // rig, while the AVI was already indexed. The samples are all there; fix the
+  // sizes from the file length so every reader accepts it.
+  const wavRepaired = existsSync(wav) ? repairWavHeader(wav) : false;
   return {
     avi,
     wav: existsSync(wav) ? wav : null,
+    forcedStop: out.forcedStop,
+    wavRepaired,
     lastFrame,
     stalled: out.stalled,
     stoppedEarly: out.stoppedEarly,
@@ -568,13 +596,21 @@ const NO_VIDEO_MESSAGE_LINES = 8;
  * either, so contention, a bad profile and a startup crash all looked the same.
  * The message starts exactly as before, for anyone matching on it.
  */
-export function noVideoError(slpPath: string, out: ExitInfo & { diagnostic: StallDiagnostic | null }): DolphinRunError {
+export function noVideoError(
+  slpPath: string,
+  out: ExitInfo & { diagnostic: StallDiagnostic | null },
+  dumpInfo: { dump?: DumpSettings | null; log?: string[] } = {},
+): DolphinRunError {
   const how =
     out.exitSignal != null ? `killed by ${out.exitSignal}` : out.exitCode != null ? `exit code ${out.exitCode}` : "no exit status";
   const why = out.diagnostic ? `, ${out.diagnostic.reason}` : "";
   const said = out.stderrTail.slice(-NO_VIDEO_MESSAGE_LINES);
+  // The codec and Dolphin's own AVIDump lines: an encoder this build lacks
+  // looks exactly like any other empty run from the outside.
+  const dumpWhy = describeDumpFailure(dumpInfo.dump ?? null, dumpInfo.log ?? []);
   const msg =
     `Dolphin produced no video for ${slpPath} (${how}${why})` +
+    (dumpWhy ? `; ${dumpWhy}` : "") +
     (said.length ? `; stderr tail:\n${said.join("\n")}` : "; stderr was empty");
   return Object.assign(new Error(msg), {
     code: "no-video" as const,
@@ -584,6 +620,8 @@ export function noVideoError(slpPath: string, out: ExitInfo & { diagnostic: Stal
     stdoutTail: out.stdoutTail,
     stderrTail: out.stderrTail,
     diagnostic: out.diagnostic,
+    dumpCodec: dumpInfo.dump?.codec ?? null,
+    dumpLog: dumpInfo.log ?? [],
   });
 }
 
@@ -679,8 +717,10 @@ export function createHideController(
     warn(o, w);
   };
 
-  // Windows "desktop": spawn through the launcher if there is one; otherwise
-  // the plain hidden window (still no window or taskbar button), said aloud.
+  // Windows: spawn through the desktop launcher if there is one. Without it,
+  // record VISIBLY rather than in a plain hidden window: a hidden window never
+  // receives taskkill's polite WM_CLOSE, so its dump would be force-killed
+  // unfinalised (measured). A visible window is an annoyance; that is data loss.
   let desktop: { launcher: string; name: string } | null = null;
   let desktopReport: HideReport["desktop"] = null;
   if (plan.useDesktopLauncher) {
@@ -690,10 +730,10 @@ export function createHideController(
       desktopReport = { ...desktop };
     } else {
       desktopReport = { launcher: null, name: null };
-      plan = { ...plan, method: "windows-hidden-window", useDesktopLauncher: false, wantNative: true };
+      plan = { ...plan, method: "none", useDesktopLauncher: false, spawnHidden: false, wantNative: false };
       addWarn({
         code: "hide-desktop-unavailable",
-        detail: `no ${HIDE_LAUNCHER_EXE} (hideLauncherPath, DOLPHIN_RUNNER_HIDE_LAUNCHER or the bundled copy); hiding the window instead`,
+        detail: `no ${HIDE_LAUNCHER_EXE} (hideLauncherPath, DOLPHIN_RUNNER_HIDE_LAUNCHER or the bundled copy); recording in a visible window (a hidden window cannot be stopped gracefully on Windows)`,
       });
     }
   }

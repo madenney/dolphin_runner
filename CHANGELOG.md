@@ -6,6 +6,35 @@ failure mode this package exists to prevent.
 
 Until 1.0 the minor is the breaking digit: `0.x.0` may break, `0.x.y` never does.
 
+## Unreleased (hide-recording branch)
+
+Measured on the Windows rig (Windows 11, NVIDIA, Playback 3.5.2).
+
+**May affect you**
+
+- **Windows `hide: true` now runs Dolphin on a hidden desktop** through the
+  bundled `lunar-hidden-launcher.exe`, the same as `"desktop"`. The plain hidden
+  window (`windowsHide` + RenderToMain) is gone: taskkill's polite stop never
+  reaches a hidden window, so every dump was force-killed unindexed. With no
+  launcher the run records in a visible window and warns
+  `hide-desktop-unavailable` (it used to fall back to the hidden window).
+- **`hide` pins `GFXBackend=OGL` on Windows, not DX11.** DX11 dumps drop frames
+  (3240 of 3600 at 0.78x, WAV 5.9 s longer than the video), visible or hidden.
+- **The graceful stop waits 15 s on Windows before forcing** (`stopGraceMs`,
+  default `defaultStopGraceMs()`; 5 s elsewhere, as before). With 4 Dolphins
+  stopping at once, exit after a finalised dump took 8-14 s at times.
+- **Record mode writes `Logger.ini`**: file log on, `[Logs] VIDEO`, verbosity
+  3. Opt out with `dumpLog: false`.
+
+**New**
+
+- "Produced no video" names the dump codec and quotes Dolphin's AVIDump log
+  (`err.dumpCodec`, `err.dumpLog`); `dump-codec-fallback` warning when Dolphin
+  swapped an unknown codec name for mpeg4.
+- `RecordResult.forcedStop` (the grace ran out) and `wavRepaired` (the WAV's
+  RIFF/data sizes, written only after the video backend shuts down, were
+  rewritten from its length). `repairWavHeader()` is exported.
+
 ## 0.5.7 — 2026-10-13
 
 Diagnosis and cross-platform fixes. Every new result field is additive; the

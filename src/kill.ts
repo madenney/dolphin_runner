@@ -15,6 +15,8 @@ export interface KillDeps {
   tree?: (root: number) => number[];
   /** Is this pid still running? Used before the Windows escalation. */
   alive?: (pid: number) => boolean;
+  /** Called when a graceful stop had to be forced (the escalation fired on a live process). */
+  onForce?: () => void;
 }
 
 /**
@@ -107,7 +109,10 @@ export function killTree(root: number, graceful = false, escalateMs = 5000, deps
     const t = setTimeout(() => {
       // Only if it ignored the polite request: a pid that is gone may already
       // belong to something else.
-      if (alive(root)) exec("taskkill", taskkillArgs(root, true));
+      if (alive(root)) {
+        deps.onForce?.();
+        exec("taskkill", taskkillArgs(root, true));
+      }
     }, escalateMs);
     t.unref?.();
     return;
@@ -124,6 +129,10 @@ export function killTree(root: number, graceful = false, escalateMs = 5000, deps
     return;
   }
   send("SIGTERM");
-  const t = setTimeout(() => send("SIGKILL"), escalateMs);
+  const t = setTimeout(() => {
+    // POSIX: no cheap liveness check across the tree; report only if the root is still up.
+    if ((deps.alive ?? defaultAlive)(root)) deps.onForce?.();
+    send("SIGKILL");
+  }, escalateMs);
   t.unref?.();
 }

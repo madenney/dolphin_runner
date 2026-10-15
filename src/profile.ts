@@ -4,6 +4,7 @@ import path from "node:path";
 import { getInSection, setEverywhere, setInSection } from "./ini.ts";
 import { resolveRealProfile, realProfileExists } from "./paths.ts";
 import { hideDolphinIniDirectives, normalizeHide } from "./hide.ts";
+import { DUMP_LOG_INI } from "./dumplog.ts";
 import type { AudioBackend, ProfileOptions, RealProfile, TexturePack } from "./types.ts";
 
 /** Dump flags and the sections they live in. Both sections matter for audio. */
@@ -224,7 +225,7 @@ export async function buildProfile(userDir: string, opts: ProfileOptions & { dol
     }
     // Hiding the recording window, per OS (record mode only). Windows forces a
     // single hidden main window (RenderToMain + small MainWindow* +
-    // DisableScreenSaver off + DX11); macOS forces OGL (occluded Vulkan stalls);
+    // DisableScreenSaver off + OGL); macOS forces OGL (occluded Vulkan stalls);
     // Linux needs none here (the window is parked at runtime, not reshaped).
     // All of these CREATE their keys. GFXBackend is only pinned when the caller
     // didn't choose a backend. The runtime half is in run.ts (`hide`).
@@ -235,6 +236,16 @@ export async function buildProfile(userDir: string, opts: ProfileOptions & { dol
       }
     }
     await fsp.writeFile(path.join(destConfig, "Dolphin.ini"), dol);
+  }
+
+  // 3b. Dolphin's file log, VIDEO channel, warnings and up: the only place
+  //     AVIDump says an encoder was refused or a codec name unknown, which
+  //     record() quotes in its "produced no video" error (see dumplog.ts).
+  if (recording && opts.dumpLog !== false) {
+    const lp = path.join(destConfig, "Logger.ini");
+    let logger = await fsp.readFile(lp, "utf8").catch(() => "");
+    for (const d of DUMP_LOG_INI) logger = setInSection(logger, d.section, d.key, d.value);
+    await fsp.writeFile(lp, logger);
   }
 
   // 4. Gecko codes, verbatim from the consumer.

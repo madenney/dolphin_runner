@@ -556,7 +556,39 @@ separate-desktop launcher.
   a silent fail). Everything is by pid, never by title (the project rule).
 - Verified end to end on this box: see "Verified here" below.
 
-### Windows — implemented, UNVERIFIED (needs the Windows rig)
+### Windows — measured on the Windows rig (2026-10-14/15)
+
+What the rig found (Windows 11, NVIDIA, Slippi Playback 3.5.2; the section
+below is the original pre-rig plan, kept for the reasoning):
+
+- **Hidden desktop wins.** Through `lunar-hidden-launcher.exe`: 0 ms visible, 0
+  taskbar buttons, no flashes, focus kept with 4 in parallel (a visible Dolphin
+  stole it), dumps frame-identical to visible, and a 20-clip and a 4x5 batch
+  left no processes or desktops behind. `hide: true` now means this.
+- **The plain hidden window could not be stopped.** `windowsHide` + RenderToMain
+  never received taskkill's WM_CLOSE (Dolphin logged no stop at all), so the
+  dump was force-killed without its index every time, x1 and x4, OGL/DX11/
+  Vulkan. The rig's own shim, which PostMessages WM_CLOSE to every window of
+  the pid, finalised the same configuration. Dropped.
+- **DX11 drops frames**: 3240 of 3600 at 0.78x even visible, WAV 5.9 s longer
+  than the video. OGL and Vulkan are frame-exact. `hide` pins OGL.
+- **Speed.** Visible recordings copied Slippi's `VSync = True` and ran at
+  exactly 1.00x; with VSync off (BACKGROUND_RECORD) visible and hidden match.
+  Hidden, the encoder is the limit: ffv1 1.19x at EFB 2, 0.34x at EFB 4, 0.16x
+  at EFB 6; mpeg4 (150 Mb/s) 3.99x / 1.26x / 0.62x. x4 per Dolphin: ffv1
+  1.03x / 0.32x / 0.15x, mpeg4 2.87x / 1.04x / 0.55x.
+- **Only ffv1 and mpeg4 encode** (see the README's codec section): utvideo,
+  ffvhuff, huffyuv, magicyuv, zmbv write no video; libx264 / h264_nvenc fall
+  back to mpeg4 with "Invalid codec" in the log.
+- **Hidden Dolphins exit with 0xC0000409** after finalising (both files fine),
+  ~2 s after the end frame; visible ones exit 0 in ~0.6-1 s.
+- **Slow exits at x4.** Sometimes all four Dolphins sat in "Shutting down HW"
+  for 8-14 s and left it at the same millisecond (cause not found; it did not
+  reproduce on a later run with the same settings). AVIDump is finalised
+  before that, the WAV only after it, so a forced stop leaves the WAV sizes
+  unwritten: the grace is 15 s on Windows and `record()` repairs the header.
+
+### Windows — the original plan (pre-rig)
 
 Ship-first recipe (A in the research), all written, none run on Windows:
 

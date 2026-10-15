@@ -65,17 +65,17 @@ test("normalizeHide: falsy is null, true is window, explicit passes through", ()
 
 // --- per-OS ini -------------------------------------------------------------
 
-test("Windows hide forces a single hidden main window and DX11", () => {
+test("Windows hide forces a single hidden main window and OGL (DX11 drops dump frames)", () => {
   const d = hideDolphinIniDirectives("win32");
   const get = (section: string, key: string) => d.find((x) => x.section === section && x.key === key)?.value;
   assert.equal(get("Display", "RenderToMain"), "True"); // SW_HIDE then covers everything
   assert.equal(get("Display", "Fullscreen"), "False");
   assert.equal(get("Display", "DisableScreenSaver"), "False"); // don't keep the monitor awake
   assert.equal(get("Interface", "MainWindowWidth"), "640"); // backbuffer size under RenderToMain
-  assert.equal(get("Core", "GFXBackend"), "DX11");
+  assert.equal(get("Core", "GFXBackend"), "OGL");
 });
 
-test("Windows hide does NOT pin DX11 when the caller chose a backend", () => {
+test("Windows hide does NOT pin a backend when the caller chose a backend", () => {
   const d = hideDolphinIniDirectives("win32", { hasGfxBackend: true });
   assert.equal(d.find((x) => x.key === "GFXBackend"), undefined);
 });
@@ -93,11 +93,11 @@ test("Linux hide writes NO extra ini (the window is parked, not reshaped)", () =
 test("buildProfile applies the Windows hide recipe in record mode", async () => {
   await buildProfile(userDir, { mode: "record", hide: true, platform: "win32" });
   assert.equal(getInSection(dol(), "Display", "RenderToMain"), "True");
-  assert.equal(getInSection(dol(), "Core", "GFXBackend"), "DX11");
+  assert.equal(getInSection(dol(), "Core", "GFXBackend"), "OGL");
   assert.equal(getInSection(dol(), "Interface", "MainWindowHeight"), "360");
 });
 
-test("an explicit gfxBackend wins over hide's DX11 pin", async () => {
+test("an explicit gfxBackend wins over hide's OGL pin", async () => {
   await buildProfile(userDir, { mode: "record", hide: true, platform: "win32", gfxBackend: "Vulkan" });
   assert.equal(getInSection(dol(), "Core", "GFXBackend"), "Vulkan");
 });
@@ -130,13 +130,13 @@ test("detectSession reads server and compositor from the environment", () => {
 
 // --- planHide: per-OS selection --------------------------------------------
 
-test("planHide Windows: hidden window, spawn hidden, native wanted, unverified", () => {
+test("planHide Windows: hide true IS the desktop launcher (the plain hidden window can't be stopped gracefully)", () => {
   const p = planHide(true, "win32", {})!;
-  assert.equal(p.method, "windows-hidden-window");
-  assert.equal(p.spawnHidden, true);
-  assert.equal(p.wantNative, true);
-  assert.equal(p.useDesktopLauncher, false);
-  assert.equal(p.verified, false);
+  assert.equal(p.method, "windows-desktop");
+  assert.equal(p.useDesktopLauncher, true);
+  assert.equal(p.spawnHidden, false);
+  assert.equal(p.wantNative, false);
+  assert.equal(p.verified, true); // measured on the Windows rig
 });
 
 test("planHide Windows desktop: the launcher, and no koffi calls (it does QoS itself)", () => {
@@ -191,21 +191,25 @@ test("controller Windows desktop: spawns through the launcher on its own desktop
   assert.equal(r.native, null);
 });
 
-test("controller Windows desktop without a launcher: hidden window instead, with a warning", async () => {
-  const warnings: string[] = [];
-  const c = createHideController({ hide: "desktop", onWarning: (w) => warnings.push(w.code) }, undefined, {
-    platform: "win32",
-    env: {},
-    findLauncher: () => null,
-    loadNative: () => null,
-  })!;
-  assert.equal(c.desktop, null);
-  assert.equal(c.spawnHidden, true);
-  c.beforeSpawn();
-  const r = await c.finalize(null);
-  assert.equal(r.method, "windows-hidden-window");
-  assert.deepEqual(r.desktop, { launcher: null, name: null });
-  assert.ok(warnings.includes("hide-desktop-unavailable"));
+test("controller Windows without a launcher: records VISIBLY with a warning, never a plain hidden window", async () => {
+  for (const hide of [true, "desktop"] as const) {
+    const warnings: string[] = [];
+    const c = createHideController({ hide, onWarning: (w) => warnings.push(w.code) }, undefined, {
+      platform: "win32",
+      env: {},
+      findLauncher: () => null,
+      loadNative: () => {
+        throw new Error("no koffi calls in the visible fallback");
+      },
+    })!;
+    assert.equal(c.desktop, null);
+    assert.equal(c.spawnHidden, false); // a hidden window never gets taskkill's WM_CLOSE
+    c.beforeSpawn();
+    const r = await c.finalize(null);
+    assert.equal(r.method, "none");
+    assert.deepEqual(r.desktop, { launcher: null, name: null });
+    assert.ok(warnings.includes("hide-desktop-unavailable"));
+  }
 });
 
 test("planHide macOS: accessory app, unverified, and desktop falls back with a warning", () => {
@@ -251,45 +255,26 @@ test("compositorMoveArgs: sway scratchpad, Hyprland silent special, both by pid"
 
 // --- the controller (injected platform/env/exec/native) --------------------
 
-test("controller Windows: spawn hidden, QoS high, foreground locked, report unverified", async () => {
-  const calls: string[] = [];
-  const fakeNative: WinNativeBackend = {
-    setHighQos: (pid) => (calls.push(`qos ${pid}`), true),
-    lockForeground: () => (calls.push("lock"), true),
-    unlockForeground: () => (calls.push("unlock"), true),
-  };
+test("controller Windows hide true: through the launcher, verified, no koffi", async () => {
   const c = createHideController({ hide: true }, undefined, {
     platform: "win32",
     env: {},
-    loadNative: () => fakeNative,
+    findLauncher: () => "C:/bundled/lunar-hidden-launcher.exe",
+    loadNative: () => {
+      throw new Error("the launcher does QoS itself");
+    },
   })!;
-  assert.equal(c.spawnHidden, true);
+  assert.equal(c.spawnHidden, false);
+  assert.equal(c.desktop?.launcher, "C:/bundled/lunar-hidden-launcher.exe");
   c.beforeSpawn();
   c.onSpawn(1234);
   const report = await c.finalize(null);
   c.cleanup();
-  assert.equal(report.method, "windows-hidden-window");
-  assert.equal(report.verified, false);
-  assert.equal(report.spawnHidden, true);
-  assert.equal(report.native?.qos, "high");
-  assert.equal(report.native?.foregroundLock, "locked");
-  assert.ok(calls.includes("lock") && calls.includes("qos 1234"));
+  assert.equal(report.method, "windows-desktop");
+  assert.equal(report.verified, true);
+  assert.equal(report.native, null);
 });
 
-test("controller Windows without koffi: warns, reports unavailable, still hides", async () => {
-  const warnings: string[] = [];
-  const c = createHideController({ hide: true, onWarning: (w) => warnings.push(w.code) }, undefined, {
-    platform: "win32",
-    env: {},
-    loadNative: () => null,
-  })!;
-  c.beforeSpawn();
-  c.onSpawn(1);
-  const report = await c.finalize(null);
-  assert.equal(report.spawnHidden, true); // windowsHide needs no native
-  assert.equal(report.native?.available, false);
-  assert.ok(warnings.includes("hide-native-unavailable"));
-});
 
 test("controller Linux parking: synthesizes a last-workspace placement", () => {
   const c = createHideController({ hide: true }, ":0", {

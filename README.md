@@ -111,17 +111,17 @@ const res = await record(paths, slp, { ...HIDDEN_RECORD, userDir, outDir, displa
 ```
 
 `hide` can be `true` / `"window"` (the default per-OS hiding) or `"desktop"`
-(Windows-only separate-desktop launcher, experimental; falls back to `"window"`
-elsewhere with a warning). What each OS does:
+(the same on Windows; falls back to `"window"` elsewhere with a warning). What
+each OS does:
 
 | OS | What `hide` does | Verified |
 |---|---|---|
 | **Linux** | Parks the Dolphin's windows by pid on workspace `"last"` (GNOME dynamic workspaces always have a trailing one); under sway/Hyprland it moves them by pid through `swaymsg … move scratchpad` / `hyprctl … movetoworkspacesilent special:…,pid:`; wlroots without EWMH is reported unsupported | **Yes** (X11/GNOME, here) |
-| **Windows** | Spawns `windowsHide: true` and forces a single hidden main window (`RenderToMain=True`, `Fullscreen=False`, small `MainWindow*`, `DisableScreenSaver=False`, `GFXBackend=DX11`). Optional native QoS opt-out + foreground lock if the host installs `koffi`. The graceful stop stays `taskkill /T` (WM_CLOSE → AVIDump finalises) | **No** — needs the Windows rig |
+| **Windows** | Runs Dolphin on its own never-shown desktop through the bundled `lunar-hidden-launcher.exe` (`native/win/bin/`), and forces a single main window (`RenderToMain=True`, `Fullscreen=False`, small `MainWindow*`, `DisableScreenSaver=False`) on `GFXBackend=OGL` (DX11 drops dump frames). Graceful stop: `taskkill /T` on the launcher, which relays WM_CLOSE to Dolphin. No launcher → records in a visible window with `hide-desktop-unavailable` (a plain hidden window never gets taskkill's WM_CLOSE, so its dump would be killed unindexed) | **Yes** — Windows rig, 2026-10-14/15 (0 ms visible, 0 taskbar buttons, focus kept with 4 in parallel, dumps identical, 20-clip and 4x5 batches leak-free) |
 | **macOS** | Forces OGL (occluded Vulkan/MoltenVK stalls), and hides the process by pid (`NSRunningApplication(pid).hide()` via JXA). `prepareMacRecorderApp()` builds a cached LSUIElement accessory copy (own bundle id, ad-hoc re-signed) to pass as `dolphinPath` — no Dock tile, no focus steal | **No** — needs a Mac |
 
-`res.hide.verified` is `false` on Windows and macOS: the recipe is written from
-Slippi's source and the OS docs but has not been run there. See
+`res.hide.verified` is `false` on macOS: the recipe is written from Slippi's
+source and the OS docs but has not been run there. See
 docs/background-and-mute.md for the full per-OS reasoning and the test plans.
 
 ### A stall is not a failure
@@ -271,7 +271,7 @@ that resolution — an Electron host whose `app.getPath('appData')` disagrees).
 | `keepWindowOnTop` | source | `[Display] KeepWindowOnTop` |
 | `detachHotkeys` | on in record mode | writes a `Hotkeys.ini` bound to no device, so a focus-stealing Dolphin can't eat keystrokes |
 | `window` | source | `{ fullscreen: true }` or `{ width, height, x?, y? }`. **Oversize windows become 640x480** — Dolphin's own clamp, not the WM's |
-| `gfxBackend` | source | `"OGL"` \| `"Vulkan"` (plus `"DX11"`/`"D3D12"`/`"DX9"` on Windows). OGL is required for obs-vkcapture; `hide` pins `"DX11"` on Windows unless you set one |
+| `gfxBackend` | source | `"OGL"` \| `"Vulkan"` (plus `"DX11"`/`"D3D12"`/`"DX9"` on Windows). OGL is required for obs-vkcapture; `hide` pins `"OGL"` on Windows unless you set one (DX11 drops dump frames: 3240 of 3600 measured) |
 | `hide` | off | hide a RECORDING window per OS: `true`/`"window"`, or `"desktop"` (Windows launcher, experimental). Record mode. Set the SAME value on `record()`. See "Hiding a recording entirely" |
 | `platform` | `process.platform` | override the OS `hide`'s ini is written for (testing / cross-build) |
 | `emulationSpeed` | source | `[Core] EmulationSpeed`; 1 = real time, 0 = unlimited |
@@ -293,6 +293,18 @@ is the recording speed limit (measured; `docs/background-and-mute.md`):
 `utvideo` is ~bit-exact and 0.81x at EFB 6 but needs an even dump width (so it
 is refused at `efbScale: 2`, which is 939 wide) and writes ~12 GB per 75 s game;
 `mpeg4` is lossy and fast. `h264` is refused — it drops the last ~50 frames.
+
+**Windows Playback has only `ffv1` and `mpeg4`.** Its FFmpeg (3.2.4, linked
+into `Slippi Dolphin.exe`) was built without the utvideo, ffvhuff, huffyuv,
+magicyuv and zmbv encoders: Dolphin logs "Could not find encoder or allocate
+codec context", writes no `.avi` and exits 0 (or 0xC0000409 on a hidden
+desktop). Unknown names (`libx264`, `h264_nvenc`) silently become mpeg4.
+Measured on the Windows rig (hidden, x1, 10 s clip): ffv1 1.19x at EFB 2,
+0.34x at EFB 4, 0.16x at EFB 6; mpeg4 at 150 Mb/s 3.99x / 1.26x / 0.62x at
+49-51 dB PSNR against ffv1. Record mode turns on Dolphin's VIDEO file log so
+`record()` names the codec and quotes those lines in its "produced no video"
+error (`err.dumpCodec`, `err.dumpLog`), and warns `dump-codec-fallback` when a
+name was swapped for mpeg4.
 
 #### Run options (`record` and `obsMirror`)
 

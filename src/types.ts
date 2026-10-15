@@ -153,8 +153,9 @@ export interface ProfileOptions {
    * are the only two on Linux — Playback has no software or null renderer.
    *
    * On Windows the Direct3D names are valid too (`"DX11"`, `"D3D12"`, `"DX9"`,
-   * the exact `GetName()` strings); `hide` pins `"DX11"` there unless you set
-   * one. A blank value resolves to DX11 on Windows, OGL on Linux.
+   * the exact `GetName()` strings); `hide` pins `"OGL"` there unless you set
+   * one. A blank value resolves to DX11 on Windows, OGL on Linux. Record with
+   * OGL on Windows: DX11 dumps drop frames (3240 of 3600 measured).
    */
   gfxBackend?: "OGL" | "Vulkan" | "DX11" | "D3D12" | "DX9";
   /**
@@ -239,6 +240,13 @@ export interface ProfileOptions {
   /** `[Settings] ShaderCompilationMode`. 0 = specialized/synchronous-on-demand. */
   shaderCompilationMode?: 0 | 1 | 2 | 3;
   /**
+   * Record mode: turn Dolphin's file log on for the VIDEO channel at warning
+   * level (`<userDir>/Logs/dolphin.log`), so `record()` can say WHY a dump
+   * came out empty (an encoder this build lacks) or fell back to mpeg4 (an
+   * unknown codec name). Default true; false leaves Logger.ini as copied.
+   */
+  dumpLog?: boolean;
+  /**
    * Link `<userDir>/Cache` here (a symlink; a directory junction on Windows,
    * since 0.5.7) so shaders compiled once persist across
    * throwaway dirs and reboots. PER INSTANCE, never shared: two Dolphins
@@ -276,10 +284,11 @@ export interface RunnerWarning {
     | "placement-no-monitor" // `monitor` named an output that isn't connected
     | "hide-unsupported" // hide asked for on an OS with no implementation
     | "hide-desktop-fallback" // hide: "desktop" asked for off Windows
-    | "hide-desktop-unavailable" // Windows: no lunar-hidden-launcher.exe found; hid the window instead
+    | "hide-desktop-unavailable" // Windows: no lunar-hidden-launcher.exe found; recorded in a visible window
     | "hide-session-unsupported" // a Wayland compositor we can't hide a window on (wlroots, etc.)
     | "hide-native-unavailable" // Windows: koffi not installed, so QoS/foreground-lock skipped
-    | "hide-failed"; // a hide step threw; the recording still ran
+    | "hide-failed" // a hide step threw; the recording still ran
+    | "dump-codec-fallback"; // Dolphin did not know the dump codec and dumped mpeg4 instead
   detail: string;
 }
 
@@ -434,6 +443,19 @@ export interface RunOptions {
    */
   hardTimeoutMs?: number;
   /**
+   * How long a graceful stop (end of replay, `onFrame` "stop", hard timeout)
+   * waits for Dolphin to exit before it is forced. Default
+   * `defaultStopGraceMs()`: 15 s on Windows, 5 s elsewhere.
+   *
+   * On Windows the forced stop is TerminateProcess. Measured on the Windows
+   * rig: a recording that had already finalised its `.avi` often took more
+   * than 5 s to EXIT with 4 Dolphins stopping at once (every slot of a
+   * 4-parallel cell hit the old 5 s escalation), and a hidden-desktop
+   * Dolphin takes ~2-2.7 s even alone. Forcing too early risks the index of a
+   * dump that is still finalising; waiting longer costs nothing when it exits.
+   */
+  stopGraceMs?: number;
+  /**
    * Extra environment for the Dolphin process, on top of ours. `display`,
    * `audioSink` and `appName` are applied after it and win.
    */
@@ -463,13 +485,12 @@ export interface RunOptions {
    */
   hide?: HideTarget;
   /**
-   * Windows, `hide: "desktop"` only: the `lunar-hidden-launcher.exe` to spawn
+   * Windows `hide` (`true` or `"desktop"`): the `lunar-hidden-launcher.exe` to spawn
    * Dolphin through (it runs Dolphin on its own never-shown desktop). Default:
    * `DOLPHIN_RUNNER_HIDE_LAUNCHER`, then the copy this package ships in
    * `native/win/bin/`. A host app that signs its own copy passes that path (an
    * Electron app must point at an unpacked file: an exe inside an asar can't run).
-   * When none exists the run falls back to `hide: "window"` with a
-   * `hide-desktop-unavailable` warning.
+   * `hide: true` on Windows uses it too when it exists (see `HideTarget`).
    */
   hideLauncherPath?: string;
   /** Non-fatal things the runner skipped or couldn't do (placement, hiding). */
@@ -678,6 +699,10 @@ export interface DolphinRunError extends Error, ExitInfo {
   replay: string;
   /** The watchdog's or early-exit's diagnostic, if one was taken. */
   diagnostic: StallDiagnostic | null;
+  /** The dump codec the profile asked for (`"ffv1"`, a DumpCodec name, `"default"`); null if unreadable. */
+  dumpCodec: string | null;
+  /** Dolphin's AVIDump log lines (record mode turns its file log on), e.g. "Could not open codec". */
+  dumpLog: string[];
 }
 
 export interface PlayResult extends ExitInfo {
@@ -694,6 +719,14 @@ export interface PlayResult extends ExitInfo {
 export interface RecordResult extends ExitInfo {
   avi: string;
   wav: string | null;
+  /**
+   * The graceful stop ran out of `stopGraceMs` and Dolphin was killed. The AVI
+   * is normally indexed by then (AVIDump finalises first); the WAV's header is
+   * repaired (`wavRepaired`).
+   */
+  forcedStop: boolean;
+  /** The WAV's RIFF/data sizes were missing or wrong and were rewritten from its length. */
+  wavRepaired: boolean;
   /**
    * The `.slp`'s lastFrame, returned so the caller can length-check the dump
    * without re-reading the replay. Expected seconds = (lastFrame + 123) / 60.

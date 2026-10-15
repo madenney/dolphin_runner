@@ -74,3 +74,21 @@ test("POSIX hard kill never runs taskkill", () => {
   assert.deepEqual(sent, ["SIGKILL:1"]);
   assert.deepEqual(execd, []);
 });
+
+test("onForce fires only when a graceful stop had to be forced", async () => {
+  let forced = 0;
+  const w = windows(true);
+  killTree(42, true, 30, { ...w.deps, onForce: () => forced++ });
+  await wait(80);
+  assert.equal(forced, 1);
+  const ok = windows(false);
+  killTree(42, true, 30, { ...ok.deps, onForce: () => forced++ });
+  await wait(80);
+  assert.equal(forced, 1, "the polite stop worked: nothing forced");
+});
+
+test("defaultStopGraceMs: 15 s on Windows (exits after a finalised dump measured past 5 s), 5 s elsewhere", async () => {
+  const { defaultStopGraceMs } = await import("../src/run.ts");
+  assert.equal(defaultStopGraceMs("win32"), 15_000);
+  assert.equal(defaultStopGraceMs("linux"), 5_000);
+});

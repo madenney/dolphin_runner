@@ -15,13 +15,15 @@
  *   GNOME's dynamic workspaces always have a target). Under sway/Hyprland the
  *   window is an XWayland client with no EWMH workspace count, so it is moved
  *   by pid through the compositor's own IPC instead. See `planHide`.
- * - **Windows (UNVERIFIED — needs the Windows rig):** force a single hidden
- *   main window — `RenderToMain=True`, `Fullscreen=False`, a small
- *   `MainWindow*`, `DisableScreenSaver=False`, `GFXBackend=DX11` — and spawn
- *   with `windowsHide: true` so the first `ShowWindow` is `SW_HIDE`. No window,
- *   no taskbar button. Optional native QoS opt-out and a foreground lock
- *   (win-native.ts). `hide: "desktop"` adds the separate-desktop launcher
- *   (native/win/, experimental). The graceful stop stays `taskkill /T` (WM_CLOSE).
+ * - **Windows (verified on the Windows rig, 2026-10-14/15):** Dolphin runs
+ *   on its own never-shown desktop through `lunar-hidden-launcher.exe`
+ *   (native/win/), for `hide: true` and `"desktop"` alike. The profile half
+ *   forces a single main window — `RenderToMain=True`, `Fullscreen=False`, a
+ *   small `MainWindow*`, `DisableScreenSaver=False` — and `GFXBackend=OGL`
+ *   (DX11 drops dump frames). The graceful stop is `taskkill /T` on the
+ *   launcher, which relays WM_CLOSE to Dolphin's windows on that desktop.
+ *   A plain hidden window (`windowsHide`) was dropped: taskkill's polite stop
+ *   never reaches it, so the dump is force-killed without its index.
  * - **macOS (UNVERIFIED — needs a Mac):** run an accessory copy of the Playback
  *   app (LSUIElement, own bundle id, ad-hoc re-signed), force OGL, and hide the
  *   process by pid (mac-hide.ts). Falls back to the original app + hide helper.
@@ -33,9 +35,10 @@ import type { PlacementReport, RunnerWarning } from "./types.ts";
 
 /**
  * How hard to hide a recording Dolphin.
- * - `true` / `"window"`: the default per-OS hiding described above.
- * - `"desktop"`: Windows only — the separate-desktop launcher (experimental).
- *   On any other OS it means `"window"` with a `hide-desktop-fallback` warning.
+ * - `true` / `"window"`: the default per-OS hiding described above. On
+ *   Windows that IS the separate-desktop launcher.
+ * - `"desktop"`: the same on Windows. On any other OS it means `"window"`
+ *   with a `hide-desktop-fallback` warning.
  * - `false` / omitted: today's behaviour (visible window; `placement` still
  *   applies if given).
  */
@@ -130,11 +133,12 @@ export function hideDolphinIniDirectives(
       { section: "Interface", key: "MainWindowPosX", value: "0" },
       { section: "Interface", key: "MainWindowPosY", value: "0" },
     ];
-    // A blank GFXBackend resolves to DX11 on Windows anyway, but a profile left
-    // on OGL/Vulkan would stay — pin DX11, the most robust off-screen backend
-    // (its blt-model Present is ignored when occluded; the dump is from its own
-    // texture). Only when the caller didn't choose a backend.
-    if (!opts.hasGfxBackend) d.push({ section: "Core", key: "GFXBackend", value: "DX11" });
+    // Pin OGL. A blank GFXBackend resolves to DX11 on Windows, and DX11 DROPS
+    // frames from the dump: measured on the Windows rig (Playback 3.5.2,
+    // RTX-class GPU), 3240 of 3600 frames at 0.78x with the WAV 5.9 s longer
+    // than the video, visible or hidden; OGL and Vulkan were frame-exact.
+    // Only when the caller didn't choose a backend.
+    if (!opts.hasGfxBackend) d.push({ section: "Core", key: "GFXBackend", value: "OGL" });
     return d;
   }
   if (platform === "darwin") {
@@ -191,15 +195,23 @@ export function planHide(
   };
 
   if (platform === "win32") {
+    // Both targets go through the separate-desktop launcher: it is the only
+    // Windows method that passed the rig (0 ms visible, no taskbar button,
+    // focus kept with 4 in parallel, dumps identical, nothing left behind
+    // over a 20-clip and a 4x5 batch). The plain hidden window
+    // (`windowsHide` + RenderToMain) can NOT be stopped gracefully: taskkill's
+    // polite stop never reaches a hidden window (Dolphin logged no stop at
+    // all), so every dump was force-killed unfinalised. Without a launcher
+    // createHideController records visibly instead (`hide-desktop-unavailable`).
     return {
       ...base,
-      method: target === "desktop" ? "windows-desktop" : "windows-hidden-window",
-      spawnHidden: true,
-      // The desktop launcher sets HighQoS on Dolphin itself, and a Dolphin on
-      // another desktop cannot take the foreground: no koffi calls needed.
-      wantNative: target !== "desktop",
-      useDesktopLauncher: target === "desktop",
-      verified: false,
+      method: "windows-desktop",
+      spawnHidden: false,
+      // The launcher sets HighQoS on Dolphin itself, and a Dolphin on another
+      // desktop cannot take the foreground: no koffi calls needed.
+      wantNative: false,
+      useDesktopLauncher: true,
+      verified: true,
     };
   }
 

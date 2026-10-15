@@ -124,7 +124,7 @@ test("THE REAL PROFILE IS NEVER TOUCHED", async () => {
 });
 
 test("unrelated inis are carried across untouched", async () => {
-  await buildProfile(userDir, { mode: "record" });
+  await buildProfile(userDir, { mode: "record", dumpLog: false });
   assert.equal(read(path.join(userDir, "Config", "Logger.ini")), "[Logger]\nWriteToFile = True\n");
   // Settings we do not override must survive — the window/audio config that
   // makes a mirror window look like the user's own Dolphin.
@@ -417,4 +417,18 @@ test("sameLinkTarget: a Windows junction reads back as \\\\?\\C:\\..., and that 
   assert.ok(!sameLinkTarget("\\\\?\\C:\\Shaders\\w2", "C:\\Shaders\\w1", "Windows_NT"));
   assert.ok(sameLinkTarget("/a/b/", "/a/b", "Linux"));
   assert.ok(!sameLinkTarget("/a/B", "/a/b", "Linux"), "POSIX paths are case-sensitive");
+});
+
+test("record mode turns Dolphin's VIDEO file log on (AVIDump errors live only there), keeping the copy's keys", async () => {
+  await buildProfile(userDir, { mode: "record" });
+  const logger = read(path.join(userDir, "Config", "Logger.ini"));
+  assert.equal(getInSection(logger, "Logger", "WriteToFile"), "True"); // the copy's own key survives
+  assert.equal(getInSection(logger, "Options", "WriteToFile"), "True");
+  assert.equal(getInSection(logger, "Options", "Verbosity"), "3");
+  assert.equal(getInSection(logger, "Logs", "VIDEO"), "True");
+});
+
+test("play mode leaves Logger.ini as copied", async () => {
+  await buildProfile(userDir, { mode: "play" });
+  assert.equal(read(path.join(userDir, "Config", "Logger.ini")), "[Logger]\nWriteToFile = True\n");
 });
